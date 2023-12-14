@@ -9,12 +9,12 @@ def generate_batch_of_wm_targets(n_a: int, batch_size: int):
     Returns of batch of 'r', i.e. an index for the units around the ring
     Use 1-indexing throughout, so that the notation matches up with the handout
     """
-    return torch.randint(1, n_a, (batch_size,))  # [batch]
+    return torch.randint(1, n_a+1, (batch_size,))  # [batch]
 
 
 def generate_sensory_input_non_spatial(rs: T, fixation: bool, n_a: int):
     """Generates x vector, with batch size implicit in shape of rs (batch_size)"""
-    one_hots = F.one_hot(rs, n_a)                                                       # [batch, n_a]
+    one_hots = F.one_hot(rs-1, n_a)                                                     # [batch, n_a]
     batch_size = rs.shape[0]
     fixation_vector = torch.ones(batch_size) if fixation else torch.zeros(batch_size)   # [batch]
     return torch.concat([one_hots, fixation_vector.unsqueeze(1)], 1)                    # [batch, n_a + 1]
