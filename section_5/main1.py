@@ -3,7 +3,7 @@ from section_5.rate_rnn import ReluRateRNN
 import matplotlib.pyplot as plt
 
 import torch
-from torch import randn, pi
+from torch import randn
 
 
 ## Define our system
