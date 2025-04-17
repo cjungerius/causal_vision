@@ -42,8 +42,8 @@ for ts in range(num_timesteps):
 
 
 # Plot voltage over time
-plt.plot(time_input[1:,0].numpy(), all_voltages, label = '$v_m$')
-plt.plot(time_input[1:,0].numpy(), all_weighted_inputs, label = '$w\cdot r$')
+plt.plot(time_input[1:,0].numpy(), all_voltages, label = r'$v_m$')
+plt.plot(time_input[1:,0].numpy(), all_weighted_inputs, label = r'$w \cdot r$')
 plt.legend()
 plt.show()
 
