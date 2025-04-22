@@ -1,7 +1,9 @@
 from section_6.rate_rnn_with_io import ReluRateRNNWithIO
 from section_6.utils import generate_blank_sensory_input
-from section_chris.utils_chris import generate_batch_of_2d_wm_targets, generate_2d_sensory_input, loss_function_grid_2, errors_grid
+from section_chris.utils_chris import generate_batch_of_2d_wm_targets, generate_sensory_input_2d_vonmises, loss_function_grid_2, errors_spatial_2d, torus_embedding
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 
 import torch
@@ -12,7 +14,9 @@ from sklearn.decomposition import PCA
 
 
 ## Define our task
-n_a = 5    # size of sides of square
+n_a = 4    # points along each circular dimension
+A = 1.0
+kappa = 3.0
 
 
 ## Define our system
@@ -20,13 +24,13 @@ dt = 0.01
 tau = 0.1
 N = 30
 batch_size = 32
-rnn = ReluRateRNNWithIO(dt, N, n_a**2 + 1, 2, tau)    # Refer to notes to understand why the i/o are these sizes!
+rnn = ReluRateRNNWithIO(dt, N, n_a**2 + 1, 4, tau)    # Refer to notes to understand why the i/o are these sizes!
 
 
 ## Define training machinery
 lr = 1e-3
 opt = Adam(rnn.parameters(), lr)
-num_batches = 4000
+num_batches = 1000
 losses = [] # Store for loss curve plotting
 x_errs = [] # Store for accuracies curve plotting
 y_errs = []
@@ -65,7 +69,7 @@ for b in tqdm(range(num_batches)):
         eta = eta_tilde * C
         rnn.step_dynamics(prestim_sensory_input, eta, False)
 
-    stim_sensory_input = generate_2d_sensory_input(target_indices, True, n_a)
+    stim_sensory_input = generate_sensory_input_2d_vonmises(target_indices, True, n_a, A, kappa)
     for ts in range(stim_timesteps):
         eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(batch_size, N))
         eta = eta_tilde * C
@@ -88,7 +92,7 @@ for b in tqdm(range(num_batches)):
 
     all_network_outputs = torch.stack(batch_network_outputs, 1)
     loss = loss_function_grid_2(target_indices, all_network_outputs, n_a)
-    x_err, y_err = errors_grid(target_indices, all_network_outputs.detach(), n_a)
+    x_err, y_err = errors_spatial_2d(target_indices, all_network_outputs.detach(), n_a)
     loss.backward()
     opt.step()
 
@@ -105,8 +109,6 @@ for b in tqdm(range(num_batches)):
         axes[2].plot(y_errs)
 
         print(losses[-10:])
-        print(x_errs[-10:])
-        print(y_errs[-10:])
         fig.savefig('section_chris/grid_losses.png')
 
 
@@ -122,7 +124,7 @@ for ts in range(prestim_timesteps):
     eta = eta_tilde * C
     rnn.step_dynamics(prestim_sensory_input, eta, False)
 
-stim_sensory_input = generate_2d_sensory_input(target_indices, True, n_a)
+stim_sensory_input = generate_sensory_input_2d_vonmises(target_indices, True, n_a, A, kappa)
 for ts in range(stim_timesteps):
     eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(test_batch_size, N))
     eta = eta_tilde * C
@@ -143,16 +145,16 @@ for ts in range(resp_timesteps):
     voltage, network_output = rnn.step_dynamics(resp_sensory_input, eta, return_output=True)
     test_trial_voltages.append(voltage)
 
-all_test_trial_voltages = torch.stack(test_trial_voltages, 1).detach().numpy()
-print(all_test_trial_voltages)
-dim_reduced_voltages_flat = PCA(n_components=2).fit_transform(all_test_trial_voltages.reshape(test_batch_size * resp_timesteps, -1))
-dim_reduced_voltages = dim_reduced_voltages_flat.reshape(test_batch_size, resp_timesteps, -1)
+all_test_trial_voltages = torch.stack(test_trial_voltages, 1).detach()
 
-fig, axes = plt.subplots(1)
-for i, drv in enumerate(dim_reduced_voltages):
-    axes.plot(*drv.T, label = target_indices[i], color=plt.cm.RdYlBu(i/(n_a**2)))
-    axes.scatter(*drv[0,:,None], marker='o', color=plt.cm.RdYlBu(i/(n_a**2)))
-    axes.scatter(*drv[-1,:,None], marker='x', color=plt.cm.RdYlBu(i/(n_a**2)))
-axes.legend()
-fig.suptitle('PCA of trajectories. Response period starts at o and ends at x')
-fig.savefig('section_chris/grid_pca_reprs.png')
+mean_voltages = all_test_trial_voltages.mean(axis=1)
+
+theta1 = torch.atan2(mean_voltages[:, 1], mean_voltages[:, 0])  # angle 1
+theta2 = torch.atan2(mean_voltages[:, 3], mean_voltages[:, 2])  # angle 2
+
+
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+points = torus_embedding(theta1, theta2)
+ax.scatter(points[:, 0], points[:, 1], points[:, 2])
+plt.show()
