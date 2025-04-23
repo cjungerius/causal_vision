@@ -122,21 +122,13 @@ def loss_function_2d_vonmises(rs: T, network_outputs: T, n_a: int):
     target_1 = true_vectors[:, 0, :].unsqueeze(1)  # (batch, 1, 2)
     target_2 = true_vectors[:, 1, :].unsqueeze(1)
 
-    cos_sim_1 = torch.nn.functional.cosine_similarity(pred_1, target_1, dim=2)
-    cos_sim_2 = torch.nn.functional.cosine_similarity(pred_2, target_2, dim=2)
-    loss = 2 - cos_sim_1 - cos_sim_2  # cosine_similarity ∈ [-1, 1], so loss ∈ [0, 4]
-    return loss.mean()
+    loss_1 = ((pred_1 - target_1) ** 2).sum(dim=2)  # sum over x/y
+    loss_2 = ((pred_2 - target_2) ** 2).sum(dim=2)
 
+    return (loss_1 + loss_2).mean()
 
 def errors_spatial_2d(rs: T, network_outputs: T, n_a: int):
-    angle_errors_1, magnitudes_errors_1 = errors_spatial(rs[:,0], network_outputs[:,0:1], n_a)
-    angle_errors_2, magnitudes_errors_2 = errors_spatial(rs[:,1], network_outputs[:,2:3], n_a)
+    angle_errors_1, magnitudes_errors_1 = errors_spatial(rs[:,0], network_outputs[:,0:2], n_a)
+    angle_errors_2, magnitudes_errors_2 = errors_spatial(rs[:,1], network_outputs[:,2:4], n_a)
     return (angle_errors_1 + angle_errors_2).mean(), (magnitudes_errors_1 + magnitudes_errors_2).mean()
 
-def torus_embedding(theta1, theta2, R=2.0, r=1.0):
-    # R: major radius (from center to middle of tube)
-    # r: minor radius (tube radius)
-    x = (R + r * torch.cos(theta2)) * torch.cos(theta1)
-    y = (R + r * torch.cos(theta2)) * torch.sin(theta1)
-    z = r * torch.sin(theta2)
-    return torch.stack([x, y, z], dim=1)  # shape: (batch, 3)
