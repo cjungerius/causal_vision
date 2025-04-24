@@ -6,7 +6,7 @@
 
 from section_6.rate_rnn_with_io import ReluRateRNNWithIO
 from section_6.utils import generate_blank_sensory_input
-from section_chris.utils_chris import generate_batch_of_2d_wm_targets, generate_sensory_input_2d_vonmises, loss_function_2d_vonmises, errors_spatial_2d
+from section_chris.utils_chris import generate_batch_of_2d_wm_targets, generate_sensory_input_2d_vonmises, loss_function_2d_vonmises, errors_spatial_2d, generate_same_different
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -15,8 +15,10 @@ import numpy as np
 import torch
 from torch.optim import Adam
 from torch import randn, pi
+from torch.distributions import VonMises
 
 from sklearn.decomposition import PCA
+%matplotlib ipympl
 
 
 
@@ -24,7 +26,7 @@ from sklearn.decomposition import PCA
 
 
 ## Define our task
-n_a = 7    # points along each circular dimension
+n_a = 20    # points along each circular dimension
 A = 1.0
 kappa = 3.0
 
@@ -35,7 +37,7 @@ kappa = 3.0
 ## Define our system
 dt = 0.01
 tau = 0.1
-N = 30
+N = 70
 batch_size = 32
 rnn = ReluRateRNNWithIO(dt, N, n_a**2 + 1, 4, tau)    # Refer to notes to understand why the i/o are these sizes!
 
@@ -46,7 +48,7 @@ rnn = ReluRateRNNWithIO(dt, N, n_a**2 + 1, 4, tau)    # Refer to notes to unders
 ## Define training machinery
 lr = 1e-3
 opt = Adam(rnn.parameters(), lr)
-num_batches = 4000
+num_batches = 6000
 losses = [] # Store for loss curve plotting
 dim1_errs = [] # Store for accuracies curve plotting
 dim2_errs = []
@@ -58,7 +60,7 @@ dim2_errs = []
 ## Define simulation parameters
 T_prestim = 0.2     # in seconds
 T_stim = 0.5
-T_delay = 0.5
+T_delay = 0.2
 T_resp = 0.1
 
 prestim_timesteps = int(T_prestim / dt)
@@ -87,6 +89,10 @@ for b in tqdm(range(num_batches)):
     opt.zero_grad()
 
     target_indices = generate_batch_of_2d_wm_targets(n_a, batch_size)
+    distractor_indices = generate_batch_of_2d_wm_targets(n_a, batch_size)
+    same_different = generate_same_different(batch_size).unsqueeze(-1).expand(-1,2)
+    second_stim = torch.where(same_different==1,target_indices, distractor_indices)
+
     rnn.initialise_u(batch_size)
 
     prestim_sensory_input = generate_blank_sensory_input(n_a**2, True, batch_size)
@@ -95,11 +101,23 @@ for b in tqdm(range(num_batches)):
         eta = eta_tilde * C
         rnn.step_dynamics(prestim_sensory_input, eta, False)
 
-    stim_sensory_input = generate_sensory_input_2d_vonmises(target_indices, True, n_a, A, kappa)
+    stim_sensory_input = generate_sensory_input_2d_vonmises(target_indices, True, n_a, A, kappa, 0.0)
     for ts in range(stim_timesteps):
         eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(batch_size, N))
         eta = eta_tilde * C
         rnn.step_dynamics(stim_sensory_input, eta, False)
+
+    # delay_sensory_input = generate_blank_sensory_input(n_a**2, True, batch_size)
+    # for ts in range(delay_timesteps):
+    #     eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(batch_size, N))
+    #     eta = eta_tilde * C
+    #     rnn.step_dynamics(delay_sensory_input, eta, False)
+
+    # stim_sensory_input = generate_sensory_input_2d_vonmises(second_stim, True, n_a, A, kappa, 0.1)
+    # for ts in range(stim_timesteps):
+    #     eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(batch_size, N))
+    #     eta = eta_tilde * C
+    #     rnn.step_dynamics(stim_sensory_input, eta, False)
 
     delay_sensory_input = generate_blank_sensory_input(n_a**2, True, batch_size)
     for ts in range(delay_timesteps):
@@ -130,9 +148,9 @@ for b in tqdm(range(num_batches)):
         plt.close('all')
         fig, axes = plt.subplots(3)
 
-        axes[0].plot(losses)
-        axes[1].plot(dim1_errs)
-        axes[2].plot(dim2_errs)
+        axes[0].plot(losses[50:])
+        axes[1].plot(dim1_errs[50:])
+        axes[2].plot(dim2_errs[50:])
 
         print(losses[-10:])
         fig.savefig('section_chris/grid_losses.png')
@@ -142,7 +160,8 @@ for b in tqdm(range(num_batches)):
 
 
 ### RUN TEST TRIAL FOR ACTIVITY
-target_indices =  torch.tensor([[i,j] for i in range(1,n_a+1) for j in range(1,n_a+1)])
+#target_indices =  torch.tensor([[i,j] for i in range(1,n_a+1) for j in range(1,n_a+1)])
+target_indices = torch.randn(20,2)
 test_batch_size = target_indices.shape[0]
 rnn.initialise_u(test_batch_size)
 eta_tilde = randn(test_batch_size, N)
@@ -164,6 +183,18 @@ for ts in range(delay_timesteps):
     eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(test_batch_size, N))
     eta = eta_tilde * C
     rnn.step_dynamics(delay_sensory_input, eta, False)
+
+# stim_sensory_input = generate_sensory_input_2d_vonmises(target_indices, True, n_a, A, kappa)
+# for ts in range(stim_timesteps):
+#     eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(test_batch_size, N))
+#     eta = eta_tilde * C
+#     rnn.step_dynamics(stim_sensory_input, eta, False)
+
+# delay_sensory_input = generate_blank_sensory_input(n_a**2, True, test_batch_size)
+# for ts in range(delay_timesteps):
+#     eta_tilde = (eps1 * eta_tilde) + (eps2 * randn(test_batch_size, N))
+#     eta = eta_tilde * C
+#     rnn.step_dynamics(delay_sensory_input, eta, False)
 
 test_trial_voltages = []
 test_trial_outputs = []
@@ -249,13 +280,7 @@ def plot_outputs_on_torus(outputs, targets, R=2.0, r=.5, z_scale=.4):
 plot_outputs_on_torus(y_hat, y)
 
 
-# In[61]:
 
-
-
-
-
-# In[ ]:
 
 
 

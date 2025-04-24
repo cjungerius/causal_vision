@@ -6,7 +6,8 @@ import numpy as np
 from section_6.utils import generate_sensory_input_spatial, errors_spatial
 
 def generate_batch_of_2d_wm_targets(n_a: int, batch_size: int):
-    return torch.randint(1, n_a+1, (batch_size,2))
+    #return torch.randint(1, n_a+1, (batch_size,2))
+    return torch.rand(batch_size,2) * n_a
 
 def generate_2d_sensory_input(rs: T, fixation: bool, n_a: int):
     batch_size = rs.shape[0]
@@ -91,14 +92,14 @@ def loss_function_grid_2(rs: T, network_outputs: T, n_a: int):
     return (angle_errors + magnitude_errors).mean()
 
 
-def generate_sensory_input_2d_vonmises(rs: T, fixation: bool, n_a: int, A: float, kappa: float):
+def generate_sensory_input_2d_vonmises(rs: T, fixation: bool, n_a: int, A: float, kappa: float, noise=0.0):
     """Additionally need to set the scaling and concentration parameters of the von Mises bump (assume equal for now)"""
     batch_size = rs.shape[0]
 
     unit_indices = torch.arange(1, n_a+1).unsqueeze(0).repeat(batch_size, 1)
 
-    angle_diffs_x = (rs[:,0].unsqueeze(-1) - unit_indices) * 2 * pi / n_a
-    angle_diffs_y = (rs[:,1].unsqueeze(-1) - unit_indices) * 2 * pi / n_a
+    angle_diffs_x = (rs[:,0].unsqueeze(-1) - unit_indices + torch.randn(batch_size).unsqueeze(-1) * noise) * 2 * pi / n_a
+    angle_diffs_y = (rs[:,1].unsqueeze(-1) - unit_indices + torch.randn(batch_size).unsqueeze(-1) * noise) * 2 * pi / n_a
 
     bumps_x = A * (kappa * angle_diffs_x.cos()).exp().unsqueeze(2)                                    # [batch, n_a]
     bumps_y = A * (kappa * angle_diffs_y.cos()).exp().unsqueeze(1)
@@ -131,4 +132,3 @@ def errors_spatial_2d(rs: T, network_outputs: T, n_a: int):
     angle_errors_1, magnitudes_errors_1 = errors_spatial(rs[:,0], network_outputs[:,0:2], n_a)
     angle_errors_2, magnitudes_errors_2 = errors_spatial(rs[:,1], network_outputs[:,2:4], n_a)
     return (angle_errors_1 + angle_errors_2).mean(), (magnitudes_errors_1 + magnitudes_errors_2).mean()
-
