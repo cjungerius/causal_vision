@@ -3,7 +3,7 @@
 
 # In[1]:
 
-
+# %matplotlib widget
 from section_6.rate_rnn_with_io import ReluRateRNNWithIO
 from section_6.utils import generate_blank_sensory_input
 from section_chris.utils_chris import generate_batch_of_2d_wm_targets, generate_sensory_input_2d_vonmises, loss_function_2d_vonmises, errors_spatial_2d, generate_same_different
@@ -18,7 +18,7 @@ from torch import randn, pi
 from torch.distributions import VonMises
 
 from sklearn.decomposition import PCA
-%matplotlib ipympl
+
 
 
 
@@ -26,7 +26,7 @@ from sklearn.decomposition import PCA
 
 
 ## Define our task
-n_a = 20    # points along each circular dimension
+n_a = 10    # points along each circular dimension
 A = 1.0
 kappa = 3.0
 
@@ -37,7 +37,7 @@ kappa = 3.0
 ## Define our system
 dt = 0.01
 tau = 0.1
-N = 70
+N = 50
 batch_size = 32
 rnn = ReluRateRNNWithIO(dt, N, n_a**2 + 1, 4, tau)    # Refer to notes to understand why the i/o are these sizes!
 
@@ -48,7 +48,7 @@ rnn = ReluRateRNNWithIO(dt, N, n_a**2 + 1, 4, tau)    # Refer to notes to unders
 ## Define training machinery
 lr = 1e-3
 opt = Adam(rnn.parameters(), lr)
-num_batches = 6000
+num_batches = 3000
 losses = [] # Store for loss curve plotting
 dim1_errs = [] # Store for accuracies curve plotting
 dim2_errs = []
@@ -285,3 +285,5 @@ plot_outputs_on_torus(y_hat, y)
 
 
 
+
+# %%

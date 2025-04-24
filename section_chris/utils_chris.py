@@ -9,6 +9,10 @@ def generate_batch_of_2d_wm_targets(n_a: int, batch_size: int):
     #return torch.randint(1, n_a+1, (batch_size,2))
     return torch.rand(batch_size,2) * n_a
 
+def generate_batch_of_continuous_wm_targets(n_a: int, batch_size: int):
+    #return torch.randint(1, n_a+1, (batch_size,2))
+    return torch.rand(batch_size,) * n_a
+
 def generate_2d_sensory_input(rs: T, fixation: bool, n_a: int):
     batch_size = rs.shape[0]
     batch = torch.zeros(batch_size, n_a, n_a)
