@@ -1,0 +1,125 @@
+---
+title: "Untitled"
+format: revealjs
+---
+
+# Causal vision
+
+## The concept/problem
+
+How to know when stimuli share a common source
+integration of information across saccades/other interruptions: causal inference (depends on working memory).
+
+Requires integration of visual stimuli, determining probability of shared cause based on stimulus features (similarity) and knowledge/beliefs about the stimulus generating process
+
+One parametrization of this: mixture model of shared cause and separate cause cases.
+
+## Ideal observer model (not circular yet): Bayesian mixture model
+
+### 1D case:
+
+given two timepoints $t = 1, 2$ and two stimuli $x_t$ each sampled with noise from latent cause $\mu_t$ with standard deviation $\sigma$:
+
+$x_t \sim N(\mu_t, \sigma^2)$
+
+assume latent causes \mu are themselves drawn from latent distribution
+
+$\mu_t \sim N(\nu,\tau^2)$
+
+if $x_1$ and $x_2$ do not share a common cause, they are each drawn from a distribution with mean $\nu$ and variance $\tau^2 + \sigma^2$. alternatively: they come from a multivariate normal with means $[\nu, \nu]$ and covariance matrix
+
+$$\begin{bmatrix}
+\sigma^2 + \tau^2 & 0\\
+0, \sigma^2 + \tau^2
+\end{bmatrix}$$
+
+if x_1 and x_2 have a common cause mu, they marginally covary with $tau^2$:
+therefore, one can say they come from a multivariate normal with means $[\nu, \nu]$ and covariance matrix
+
+$$\begin{bmatrix}
+\sigma^2 + \tau^2 & \tau^2\\
+\tau^2 & \sigma^2 + \tau^2
+\end{bmatrix}$$
+
+say there is a probability of sharing a common cause $\theta$ (mixture parameter) we can model this as a mixture model of two multivariate gaussians.
+
+
+
+### 2D case:
+
+now we also have stimuli $y_t$
+
+$y_t$ also has a probability of shared or different causes.
+
+However, $y_t$ maybe independent from $x_t$ (shared or common cause does not provide information about whether C_x = 1 or 2) or they might share information p(C_x==1 | C_y==1) != p(C_x==1 | C_y==2)
+
+so now possibility of mixture for both x and y: so we can be in 4 states
+
+Cx=1 & Cy=1
+Cx=1 & Cy=2
+Cx=2 & Cy=1
+Cx=2 & Cy=2
+
+model latent state mixture as a 4 simplex.
+works!
+
+
+### Generative model: Simple circular 1D case
+
+given two stimuli $x_t$, $x_1$ and $x_2$
+
+each sampled with noise from latent cause $\mu_t$ with concentration $\kappa$:
+
+$x_t \sim VonMises(\mu_t, \kappa_{sampling})$
+
+assume latent causes mu are uniformly distributed:
+
+$\mu_t \sim U(-\pi,\pi)$
+
+if $x_1$ and $x_2$ do not share a common cause, they are each drawn from circular uniform distribution. alternatively: they are two samples from a von mises with mean \mu and variances [sigma^2 + tau^2, 0, 0, sigma^2+tau^2]
+
+if x_1 and x_2 have a common cause mu, they marginally covary with :
+
+therefore, one can say they come from a multivariate normal with means [nu, nu] and variances [sigma^2 + tau^2, tau^2, tau^2, sigma^2 + tau^2].
+
+say there is a probability of sharing a common cause theta (mixture parameter) we can model this as a mixture model of two multivariate gaussians.
+
+
+
+## Neural network: single stimulus, two timesteps
+
+- architecture
+
+n_a input neurons
+N hidden neurons
+2 output neurons
+
+- stimuli
+
+"spatial" input: stimulus in a circular space, activation a von mises bump on the n_a input neurons
+initial (distractor) stimulus
+second (target) stimulus
+chance p of shared vs different cause
+
+- task
+
+
+output: 2d vector on the unit circle: same angle as input
+
+- results
+
+model learns task efficiently
+
+effect of noise, covariance on biases
+
+## Neural network: two stimuli, two timesteps
+
+Same task as before but now there are two inputs, so:
+n_a^2 input neurons
+2d "multivariate von mises" bump
+still 2 output neurons
+
+in addition to noise, p(shared cause) for x: also p(shared cause) for y, AND *covariance* rho (note: what to use here? mutual information?)
+expectation: only effect of y on x bias if covariance of x and y during training is high - effect should scale with delta_y (discussed with Paul yesterday)
+
+

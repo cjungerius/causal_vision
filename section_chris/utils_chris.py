@@ -27,8 +27,60 @@ def generate_2d_sensory_input(rs: T, fixation: bool, n_a: int):
     fixation_vector = torch.ones(batch_size) if fixation else torch.zeros(batch_size)
     return torch.concat([batch, fixation_vector.unsqueeze(1)], 1)
 
-def generate_same_different(batch_size: int):
-    return torch.randint(1,3,(batch_size,))
+def generate_same_different(batch_size: int, p: float = 0.5):
+    x = torch.rand((batch_size,))
+    
+    return torch.where(x > p, 2, 1)
+
+def generate_correlated_binary_pairs(batch_size: int, p: float = 0.5, rho: float = 0.0):
+    """
+    Generate binary (x, y) pairs with:
+    - x ~ Bernoulli(p)
+    - y has same marginal p
+    - Pearson correlation between x and y = rho
+
+    Args:
+        batch_size (int): Number of samples
+        p (float): P(x=1) and P(y=1)
+        rho (float): Desired Pearson correlation between x and y (-1 to 1)
+
+    Returns:
+        Tensor of shape (batch_size, 2) with values in {1, 2}
+    """
+    assert 0 <= p <= 1, "p must be between 0 and 1"
+    max_rho = min(p, 1-p) / (p * (1-p))
+    assert -max_rho <= rho <= max_rho, f"rho must be in [-{max_rho:.2f}, {max_rho:.2f}] for p={p}"
+
+    # Joint probabilities
+    cov = rho * p * (1 - p)
+    P11 = p**2 + cov
+    P00 = (1 - p)**2 + cov
+    P10 = p * (1 - p) - cov
+    P01 = p * (1 - p) - cov
+
+    joint_probs = torch.tensor([P00, P01, P10, P11])
+    joint_probs = torch.clamp(joint_probs, 0, 1)  # Avoid numerical issues
+
+    dist = torch.distributions.Categorical(joint_probs)
+    samples = dist.sample((batch_size,))
+
+    # Map to binary (x, y)
+    pair_map = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]])
+    pairs = pair_map[samples]
+
+    return pairs + 1  # Optional: shift {0,1} to {1,2}
+
+def generate_same_different_2d(batch_size: int, p: float = 0.5, q: float = 0.5):
+    x = torch.bernoulli(torch.full((batch_size,), 1.0-p)).int()
+    y = torch.bernoulli(torch.full((batch_size,), 1.0-p)).int()
+    same = torch.bernoulli(torch.full((batch_size,), q))
+    y = torch.where(same==1,x,y)
+    return torch.stack((x,y),1) + 1
+
+def generate_batch_of_multivariate_inputs(batch_size: int, r: float = 0.5):
+    dist = torch.distributions.MultivariateNormal(torch.zeros(2),torch.tensor([[1,r],[r,1]]))
+    sample = dist.sample((batch_size,)) % (2*torch.pi)
+
 
 def generate_second_sensory_input(rs: T, where_diff: T, fixation: bool, n_a: int):
     rs = rs.clone()
@@ -108,7 +160,7 @@ def generate_sensory_input_2d_vonmises(rs: T, fixation: bool, n_a: int, A: float
     bumps_x = A * (kappa * angle_diffs_x.cos()).exp().unsqueeze(2)                                    # [batch, n_a]
     bumps_y = A * (kappa * angle_diffs_y.cos()).exp().unsqueeze(1)
 
-    bumps = bumps_x * bumps_y
+    bumps = bumps_x * bumps_y / torch.exp(torch.tensor(kappa))
 
     bumps = bumps.view(batch_size,-1)
 
@@ -136,3 +188,8 @@ def errors_spatial_2d(rs: T, network_outputs: T, n_a: int):
     angle_errors_1, magnitudes_errors_1 = errors_spatial(rs[:,0], network_outputs[:,0:2], n_a)
     angle_errors_2, magnitudes_errors_2 = errors_spatial(rs[:,1], network_outputs[:,2:4], n_a)
     return (angle_errors_1 + angle_errors_2).mean(), (magnitudes_errors_1 + magnitudes_errors_2).mean()
+
+
+
+
+# %%
