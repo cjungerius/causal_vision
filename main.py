@@ -71,8 +71,8 @@ stim_timesteps_2 = int(T_stim_2 / dt)
 delay_timesteps = int(T_delay / dt)
 resp_timesteps = int(T_resp / dt)
 
-sigma = .2
-p = .50
+sigma = 0.2
+p = 0.8
 
 eps1 = 0.9
 eps2 = (1 - eps1**2) ** 0.5
@@ -97,19 +97,19 @@ for b in tqdm(range(num_batches)):
     opt.zero_grad()
 
     first_indices = generate_batch_of_continuous_wm_targets(n_a, batch_size)
-    second_indices = p * first_indices + torch.sqrt(1 - p**2) * generate_batch_of_continuous_wm_targets(n_a, batch_size)
-    #same_different = generate_same_different(batch_size, p)
-    #second_indices = torch.where(same_different==1,first_indices, second_indices)
+    second_indices = generate_batch_of_continuous_wm_targets(n_a, batch_size)
+    same_different = generate_same_different(batch_size, p)
+    second_indices = torch.where(same_different==1,first_indices, second_indices)
 
     #batch_steps = torch.randint(6,first_indices.size())
 
     #second_indices = (first_indices + batch_steps) % n_a
 
-    #sigma_1 = torch.randn_like(first_indices) * sigma
-    #sigma_2 = torch.randn_like(first_indices) * sigma
+    sigma_1 = torch.randn_like(first_indices) * sigma
+    sigma_2 = torch.randn_like(first_indices) * sigma
 
-    first_input = first_indices #(first_indices + sigma_1) % n_a
-    second_input = second_indices #(second_indices + sigma_2) % n_a
+    first_input = (first_indices + sigma_1) % n_a
+    second_input = (second_indices + sigma_2) % n_a
 
 
     rnn.initialise_u(batch_size)
@@ -294,3 +294,4 @@ sns.regplot(x="delta_theta",y="error_theta",data=df,x_bins=np.arange(0, 2*torch.
 
 
 # %%
+

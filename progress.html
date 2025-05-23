@@ -9,7 +9,8 @@
 <link href="progress_files/libs/quarto-html/quarto-syntax-highlighting-2f5df379a58b258e96c21c0638c20c03.css" rel="stylesheet" id="quarto-text-highlighting-styles"><meta charset="utf-8">
   <meta name="generator" content="quarto-1.6.42">
 
-  <title>Untitled</title>
+  <meta name="author" content="Chris Jungerius">
+  <title>Causal vision progress update</title>
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, minimal-ui">
@@ -126,25 +127,76 @@
     <div class="slides">
 
 <section id="title-slide" class="quarto-title-block center">
-  <h1 class="title">Untitled</h1>
+  <h1 class="title">Causal vision progress update</h1>
 
 <div class="quarto-title-authors">
+<div class="quarto-title-author">
+<div class="quarto-title-author-name">
+Chris Jungerius 
 </div>
-
-</section>
-<section>
-<section id="causal-vision" class="title-slide slide level1 center">
-<h1>Causal vision</h1>
+</div>
+</div>
 
 </section>
 <section id="the-conceptproblem" class="slide level2">
 <h2>The concept/problem</h2>
 <p>How to know when stimuli share a common source integration of information across saccades/other interruptions: causal inference (depends on working memory).</p>
 <p>Requires integration of visual stimuli, determining probability of shared cause based on stimulus features (similarity) and knowledge/beliefs about the stimulus generating process</p>
-<p>One parametrization of this: mixture model of shared cause and separate cause cases.</p>
+</section>
+<section id="neural-network-single-stimulus-two-timesteps" class="slide level2">
+<h2>Neural network: single stimulus, two timesteps</h2>
+<ul>
+<li>architecture</li>
+<li>stimuli</li>
+<li>task</li>
+<li>results</li>
+</ul>
+</section>
+<section id="architecture" class="slide level2">
+<h2>Architecture</h2>
+<p>“vanilla” RNN</p>
+<p><span class="math inline">\(n_a\)</span> input neurons (+1 for fixation)</p>
+<p><span class="math inline">\(N\)</span> hidden neurons</p>
+<p>2 output neurons</p>
+</section>
+<section id="stimuli" class="slide level2">
+<h2>Stimuli</h2>
+<p>stimulus represented in a circular space spanned by <span class="math inline">\(n_a\)</span>:, activation a von mises bump on the input neurons (hyperparameters <span class="math inline">\(\kappa\)</span> and <span class="math inline">\(A\)</span>).</p>
+</section>
+<section id="task" class="slide level2">
+<h2>Task</h2>
+<pre><code>- fixation
+- initial (distractor) stimulus
+- second (target) stimulus
+- response period</code></pre>
+</section>
+<section id="task-1" class="slide level2">
+<h2>Task</h2>
+<h3 id="p">p</h3>
+<p>chance <span class="math inline">\(p\)</span> of shared vs different cause</p>
+<p>on every trial: “latent” first stimulus: uniform from circle latent second stimulus = shared cause ? latent first stimulus : new uniform draw</p>
+<p>add noise <span class="math inline">\(\epsilon\)</span> from <span class="math inline">\(N(0,\sigma_\epsilon^2)\)</span> to latent to represent sampling error (currently same for each timestep - could vary instead)</p>
+<p>output: 2d vector on the unit circle: same angle as input</p>
+<p>loss function: distance of output <span class="math inline">\(y\)</span> from <em>latent second stimulus</em> angle <span class="math inline">\(r\)</span>:</p>
+<p><span class="math display">\[
+\mathcal{L}(y, r) = \left(y_1 - \cos\left(\frac{2\pi r}{N_a}\right)\right)^2 + \left(y_2 - \sin\left(\frac{2\pi r}{N_a}\right)\right)^2
+\]</span></p>
+<ul>
+<li>results</li>
+</ul>
+<p>model learns task</p>
+<p>effect of <span class="math inline">\(p\)</span> on bias towards first stimulus</p>
+<p>effect of <span class="math inline">\(\sigma_\epsilon\)</span> on bias towards first stimulus</p>
+</section>
+<section id="neural-network-two-stimuli-two-timesteps" class="slide level2">
+<h2>Neural network: two stimuli, two timesteps</h2>
+<p>Same task as before but now there are two inputs, so: <span class="math inline">\(n_a^2\)</span> input neurons (+1 for fixation) 2d “multivariate von mises” bump still 2 output neurons</p>
+<p>in addition to noise, <span class="math inline">\(p_{shared}\)</span> for x: also <span class="math inline">\(p{shared}\)</span> for y, AND <em>covariance</em> <span class="math inline">\(\rho\)</span> (note: rho perhaps not best choice, what to use here? mutual information?)</p>
+<p>expectation: only effect of y on x bias if <span class="math inline">\(\rho \neq 0\)</span> - effect should scale with <span class="math inline">\(\Delta_y\)</span> (discussed with Paul yesterday)</p>
 </section>
 <section id="ideal-observer-model-not-circular-yet-bayesian-mixture-model" class="slide level2">
 <h2>Ideal observer model (not circular yet): Bayesian mixture model</h2>
+<p>One parametrization of this: mixture model of shared cause and separate cause cases.</p>
 <h3 id="d-case">1D case:</h3>
 <p>given two timepoints <span class="math inline">\(t = 1, 2\)</span> and two stimuli <span class="math inline">\(x_t\)</span> each sampled with noise from latent cause <span class="math inline">\(\mu_t\)</span> with standard deviation <span class="math inline">\(\sigma\)</span>:</p>
 <p><span class="math inline">\(x_t \sim N(\mu_t, \sigma^2)\)</span></p>
@@ -168,38 +220,18 @@
 <p>so now possibility of mixture for both x and y: so we can be in 4 states</p>
 <p>Cx=1 &amp; Cy=1 Cx=1 &amp; Cy=2 Cx=2 &amp; Cy=1 Cx=2 &amp; Cy=2</p>
 <p>model latent state mixture as a 4 simplex. works!</p>
-<h3 id="circular-1d-case">Circular 1D case:</h3>
+<h3 id="generative-model-simple-circular-1d-case">Generative model: Simple circular 1D case</h3>
 <p>given two stimuli <span class="math inline">\(x_t\)</span>, <span class="math inline">\(x_1\)</span> and <span class="math inline">\(x_2\)</span></p>
-<p>each sampled with noise from latent cause <span class="math inline">\(\mu\)</span> with variance <span class="math inline">\(\kappa\)</span>:</p>
-<p><span class="math inline">\(x \sim VonMises(\mu, \kappa)\)</span></p>
-<p>assume latent causes mu are themselves drawn from latent distribution <span class="math inline">\(mu \sim VonMises(\nu, \kappa)\)</span></p>
-<p>if x_1 and x_2 do not share a common cause, they are each drawn from a distribution with mean nu and variance tau^2 + sigma^2. alternatively: they come from a multivariate normal with means [nu, nu] and variances [sigma^2 + tau^2, 0, 0, sigma<sup>2+tau</sup>2]</p>
-<p>if x_1 and x_2 have a common cause mu, they marginally covary with : therefore, one can say they come from a multivariate normal with means [nu, nu] and variances [sigma^2 + tau^2, tau^2, tau^2, sigma^2 + tau^2].</p>
+<p>each sampled with noise from latent cause <span class="math inline">\(\mu_t\)</span> with concentration <span class="math inline">\(\kappa\)</span>:</p>
+<p><span class="math inline">\(x_t \sim VonMises(\mu_t, \kappa_{sampling})\)</span></p>
+<p>assume latent causes mu are uniformly distributed in <span class="math inline">\([0, 2\pi)\)</span>:</p>
+<p><span class="math inline">\(\mu_t \sim U(-\pi,\pi)\)</span></p>
+<p>if <span class="math inline">\(x_1\)</span> and <span class="math inline">\(x_2\)</span> do not share a common cause, they are each drawn from circular uniform distribution.</p>
+<p>if x_1 and x_2 have a common cause mu, they marginally covary with :</p>
+<p>therefore, one can say they come from a multivariate normal with means [nu, nu] and variances [sigma^2 + tau^2, tau^2, tau^2, sigma^2 + tau^2].</p>
 <p>say there is a probability of sharing a common cause theta (mixture parameter) we can model this as a mixture model of two multivariate gaussians.</p>
-</section>
-<section id="neural-network-single-stimulus-two-timesteps" class="slide level2">
-<h2>Neural network: single stimulus, two timesteps</h2>
-<ul>
-<li>architecture</li>
-</ul>
-<p>n_a input neurons N hidden neurons 2 output neurons</p>
-<ul>
-<li>stimuli</li>
-</ul>
-<p>“spatial” input: stimulus in a circular space, activation a von mises bump on the n_a input neurons initial (distractor) stimulus second (target) stimulus chance p of shared vs different cause - task</p>
-<p>output: 2d vector on the unit circle: same angle as input</p>
-<ul>
-<li>results</li>
-</ul>
-<p>model learns task efficiently</p>
-<p>effect of noise, covariance on biases</p>
-</section>
-<section id="neural-network-two-stimuli-two-timesteps" class="slide level2">
-<h2>Neural network: two stimuli, two timesteps</h2>
-<p>Same task as before but now there are two inputs, so: n_a^2 input neurons 2d “multivariate von mises” bump still 2 output neurons</p>
-<p>in addition to noise, p(shared cause) for x: also p(shared cause) for y, AND <em>covariance</em> rho expectation: only effect of y on x bias if covariance of x and y during training is high</p>
 
-</section></section>
+</section>
     </div>
   <div class="quarto-auto-generated-content" style="display: none;">
 <div class="footer footer-default">

@@ -1,9 +1,8 @@
 ---
-title: "Untitled"
+title: "Causal vision progress update"
+author: "Chris Jungerius"
 format: revealjs
 ---
-
-# Causal vision
 
 ## The concept/problem
 
@@ -12,9 +11,87 @@ integration of information across saccades/other interruptions: causal inference
 
 Requires integration of visual stimuli, determining probability of shared cause based on stimulus features (similarity) and knowledge/beliefs about the stimulus generating process
 
-One parametrization of this: mixture model of shared cause and separate cause cases.
+
+
+## Neural network: single stimulus, two timesteps
+
+- architecture
+- stimuli
+- task
+- results
+
+
+## Architecture
+
+"vanilla" RNN
+
+$n_a$ input neurons (+1 for fixation)
+
+$N$ hidden neurons
+
+2 output neurons
+
+
+## Stimuli
+
+stimulus represented in a circular space spanned by $n_a$:, activation a von mises bump on the input neurons (hyperparameters $\kappa$ and $A$).
+
+
+## Task
+
+    - fixation
+    - initial (distractor) stimulus
+    - second (target) stimulus
+    - response period
+
+
+## Task
+
+### p
+chance $p$ of shared vs different cause
+
+on every trial:
+"latent" first stimulus: uniform from circle
+latent second stimulus = shared cause ? latent first stimulus : new uniform draw
+
+add noise $\epsilon$ from $N(0,\sigma_\epsilon^2)$ to latent to represent sampling error (currently same for each timestep - could vary instead)
+
+output: 2d vector on the unit circle: same angle as input
+
+loss function: distance of output $y$ from *latent second stimulus* angle $r$:
+
+$$
+\mathcal{L}(y, r) = \left(y_1 - \cos\left(\frac{2\pi r}{N_a}\right)\right)^2 + \left(y_2 - \sin\left(\frac{2\pi r}{N_a}\right)\right)^2
+$$
+
+- results
+
+model learns task
+
+effect of $p$ on bias towards first stimulus
+
+effect of $\sigma_\epsilon$ on bias towards first stimulus
+
+## Neural network: two stimuli, two timesteps
+
+Same task as before but now there are two inputs, so:
+$n_a^2$ input neurons (+1 for fixation)
+2d "multivariate von mises" bump
+still 2 output neurons
+
+in addition to noise, $p_{shared}$ for x: also $p{shared}$ for y, AND *covariance* $\rho$ (note: rho perhaps not best choice, what to use here? mutual information?)
+
+expectation: only effect of y on x bias if $\rho \neq 0$ - effect should scale with $\Delta_y$ (discussed with Paul yesterday)
+
+
+
+
+
+
 
 ## Ideal observer model (not circular yet): Bayesian mixture model
+
+One parametrization of this: mixture model of shared cause and separate cause cases.
 
 ### 1D case:
 
@@ -72,54 +149,14 @@ each sampled with noise from latent cause $\mu_t$ with concentration $\kappa$:
 
 $x_t \sim VonMises(\mu_t, \kappa_{sampling})$
 
-assume latent causes mu are uniformly distributed:
+assume latent causes mu are uniformly distributed in $[0, 2\pi)$:
 
 $\mu_t \sim U(-\pi,\pi)$
 
-if $x_1$ and $x_2$ do not share a common cause, they are each drawn from circular uniform distribution. alternatively: they are two samples from a von mises with mean \mu and variances [sigma^2 + tau^2, 0, 0, sigma^2+tau^2]
+if $x_1$ and $x_2$ do not share a common cause, they are each drawn from circular uniform distribution. 
 
 if x_1 and x_2 have a common cause mu, they marginally covary with :
 
 therefore, one can say they come from a multivariate normal with means [nu, nu] and variances [sigma^2 + tau^2, tau^2, tau^2, sigma^2 + tau^2].
 
 say there is a probability of sharing a common cause theta (mixture parameter) we can model this as a mixture model of two multivariate gaussians.
-
-
-
-## Neural network: single stimulus, two timesteps
-
-- architecture
-
-n_a input neurons
-N hidden neurons
-2 output neurons
-
-- stimuli
-
-"spatial" input: stimulus in a circular space, activation a von mises bump on the n_a input neurons
-initial (distractor) stimulus
-second (target) stimulus
-chance p of shared vs different cause
-
-- task
-
-
-output: 2d vector on the unit circle: same angle as input
-
-- results
-
-model learns task efficiently
-
-effect of noise, covariance on biases
-
-## Neural network: two stimuli, two timesteps
-
-Same task as before but now there are two inputs, so:
-n_a^2 input neurons
-2d "multivariate von mises" bump
-still 2 output neurons
-
-in addition to noise, p(shared cause) for x: also p(shared cause) for y, AND *covariance* rho (note: what to use here? mutual information?)
-expectation: only effect of y on x bias if covariance of x and y during training is high - effect should scale with delta_y (discussed with Paul yesterday)
-
-

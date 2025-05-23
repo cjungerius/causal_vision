@@ -59,9 +59,9 @@ stim_timesteps_2 = int(T_stim_2 / dt)
 delay_timesteps = int(T_delay / dt)
 resp_timesteps = int(T_resp / dt)
 
-sigma = .75
+sigma = .2
 p = 0.5
-q = 0.8
+q = 0.5
 
 eps1 = 0.9
 eps2 = (1 - eps1**2) ** 0.5
@@ -163,17 +163,17 @@ for b in tqdm(range(num_batches)):
 
 ### RUN TEST TRIAL FOR ACTIVITY
 #target_indices =  torch.tensor([[i,j] for i in range(1,n_a+1) for j in range(1,n_a+1)])
-first_indices = torch.rand(2000,2) * n_a
-second_indices = torch.rand(2000,2) * n_a
+first_indices = torch.rand(4000,2) * n_a
+second_indices = torch.rand(4000,2) * n_a
 test_batch_size = first_indices.shape[0]
 #batch_steps = torch.randint(6, first_indices.size())
 #second_indices = (first_indices + steps[batch_steps]) % n_a
 rnn.initialise_u(test_batch_size)
 eta_tilde = randn(test_batch_size, N)
 #same_different = generate_same_different(test_batch_size)
-same_different = torch.fill(first_indices, 2)
+same_different = torch.fill(first_indices, 0)
 same_different[:,1] = torch.randint(1,3,(test_batch_size,))
-second_indices = torch.where(same_different==1,first_indices, second_indices)
+second_indices[:,1] = torch.where(same_different[:,1]==2,(first_indices[:,1]+n_a/2) % n_a,first_indices[:,1])
 #second_stim = distractor_indices #torch.where(same_different==1,target_indices, distractor_indices)
 
 #sigma_1 = torch.randn_like(target_indices) * 0.2
