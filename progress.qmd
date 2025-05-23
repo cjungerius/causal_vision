@@ -70,20 +70,21 @@ $$
 ## Results
 
 model learns task
+![](progress_images/model_output.png)
 
 biases towards first stimulus depends on p and sigma:
 
 ## $p = 0, \sigma = 0$
-![](progress_images/p0sigma0.png){width=100%}
+![](progress_images/p0sigma0.png)
 
 ## $p = 0.5, \sigma = 0$
-![](progress_images/p05sigma0.png){width=100%}
+![](progress_images/p05sigma0.png)
 
 ## $p = 0.5, \sigma = 0.2$
-![](progress_images/p05sigma02.png){width=100%}
+![](progress_images/p05sigma02.png)
 
 ## $p = 0.8, \sigma = 0.2$
-![](progress_images/p08sigma02.png){width=100%}
+![](progress_images/p08sigma02.png)
 
 
 ## Neural network: two stimuli, two timesteps
@@ -97,14 +98,14 @@ in addition to noise, $p_{shared}$ for x: also $p{shared}$ for y, AND *covarianc
 
 expectation: only effect of y on x bias if $\rho \neq 0$ - effect should scale with $\Delta_y$ (discussed with Paul yesterday)
 
-##
+## $p = 0.5, \sigma = 0.2, q = 0$
 ![](progress_images/p05sigma02q0.png)
 
-##
+## $p = 0.5, \sigma = 0.2, q = 0.75$
 ![](progress_images/p05sigma02q075.png)
 
 
-## Generative model: Simple circular 1D case{.scrollable}
+## Generative model: Simple circular 1D case{.scrollable .smaller}
 
 given two stimuli $x_t$, $x_{t-1}$
 
@@ -112,17 +113,43 @@ each sampled with noise from latent cause $\mu_i$ with concentration $\kappa$:
 
 $x_t \sim VonMises(\mu_t, \kappa)$
 
-assume latent causes mu are uniformly distributed in $[0, 2\pi)$:
+assume latent causes $\mu$ are uniformly drawn from $[0, 2\pi)$:
 
 $\mu_t \sim U(0, 2\pi)$
 
+say there is a probability of sharing a common cause $\theta$ (mixture parameter)
+
+ideal observer estimate of mu given $x_t$ and $and x_{t-1}$ is
+
 if $x_t$ and $x_{t-1}$ do not share a common cause, they are each drawn from circular uniform distribution. 
 
-if $x_t$ and $x_{t-1}$ have a common cause mu, they marginally covary with:
+if $x_t$ and $x_{t-1}$ have a common cause mu, they are both drawn from the same $VonMises(\mu,\kappa)$
 
 say there is a probability of sharing a common cause $\theta$ (mixture parameter)
 
+what is the posterior of $\mu_t$ given $x_t$ and $x_{t-1}$?
 
+mixture of *shared* and *independent* cause cases:
+$$
+p(\mu_t | x_t, x_{t-1}) = \theta \cdot p_{shared}(\mu | x_t, x_{t-1}) + (1 - \theta) \cdot p_{indep}(\mu_t | x_t)
+$$
+
+shared portion:
+
+$$
+p_{shared}(\mu | x_t, x_{t-1}) \propto p(x_t | \mu) \cdot p(x_{t-1} | \mu) \cdot p(\mu)
+$$
+
+independent portion:
+
+$$
+p_{indep}(\mu_t | x_t) \propto p(x_t | \mu_t)
+\\
+p_{indep}(\mu_t | x_t) = VonMises(\mu: x_t, \kappa)
+$$
+
+
+so...
 
 ## Generative model (not circular yet): Bayesian mixture model{.scrollable}
 
