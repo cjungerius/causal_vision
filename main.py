@@ -9,7 +9,6 @@ from section_chris.utils_chris import generate_batch_of_continuous_wm_targets, g
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from torch.optim import Adam
@@ -17,6 +16,10 @@ from torch import randn, pi
 from torch.distributions import VonMises
 import seaborn as sns
 import pandas as pd
+from scipy.special import iv as besselI
+from scipy.optimize import minimize_scalar
+from scipy.stats import vonmises
+from itertools import product
 
 from sklearn.decomposition import PCA
 
@@ -29,7 +32,7 @@ from sklearn.decomposition import PCA
 ## Define our task
 n_a = 10    # points along circular dimension
 A = 1.0
-kappa = 3.0
+kappa = 5.0
 
 
 # In[53]:
@@ -37,8 +40,8 @@ kappa = 3.0
 
 ## Define our system
 dt = 0.01
-tau = 0.1
-N = 60
+tau = 0.2
+N = 40
 batch_size = 48
 rnn = ReluRateRNNWithIO(dt, N, n_a + 1, 2, tau)    # Refer to notes to understand why the i/o are these sizes!
 
@@ -49,7 +52,7 @@ rnn = ReluRateRNNWithIO(dt, N, n_a + 1, 2, tau)    # Refer to notes to understan
 ## Define training machinery
 lr = 1e-3
 opt = Adam(rnn.parameters(), lr)
-num_batches = 4000
+num_batches = 8000
 losses = [] # Store for loss curve plotting
 dim1_errs = [] # Store for accuracies curve plotting
 dim2_errs = []
@@ -60,8 +63,8 @@ dim2_errs = []
 
 ## Define simulation parameters
 T_prestim = 0.1     # in seconds
-T_stim_1 = 0.5
-T_stim_2 = 0.2
+T_stim_1 = 0.4
+T_stim_2 = 0.4
 T_delay = 0.0
 T_resp = 0.1
 
@@ -71,18 +74,16 @@ stim_timesteps_2 = int(T_stim_2 / dt)
 delay_timesteps = int(T_delay / dt)
 resp_timesteps = int(T_resp / dt)
 
-sigma = 0.2
-p = 0.8
+kappa_tilde = 10 # von Mises concentration parameter for the sensory input
+# noise generating von mises distribution
+noise_dist = VonMises(0, kappa_tilde)
+p = 0.7
 
 eps1 = 0.9
 eps2 = (1 - eps1**2) ** 0.5
-C = .5
+C = .1
 
 steps = torch.tensor([20, 35, 75, -20, -35, -75]) / 360 * n_a
-
-
-# In[56]:
-
 
 ## Initialise simulation, including the first noise term
 eta_tilde = randn(batch_size, N)
@@ -105,11 +106,14 @@ for b in tqdm(range(num_batches)):
 
     #second_indices = (first_indices + batch_steps) % n_a
 
-    sigma_1 = torch.randn_like(first_indices) * sigma
-    sigma_2 = torch.randn_like(first_indices) * sigma
+    #generate shifts of first_input and second_input from indices using noise dist
+    first_noise = noise_dist.sample(first_indices.shape) * n_a / (2* pi)
+    second_noise = noise_dist.sample(second_indices.shape) * n_a / (2* pi)
 
-    first_input = (first_indices + sigma_1) % n_a
-    second_input = (second_indices + sigma_2) % n_a
+    first_input = (first_indices + first_noise) % n_a
+    second_input = (second_indices + second_noise) % n_a
+    #first_input = (first_indices + sigma_1) % n_a
+    #second_input = (second_indices + sigma_2) % n_a
 
 
     rnn.initialise_u(batch_size)
@@ -281,7 +285,7 @@ plt.scatter(delta_theta.numpy(), error_theta.numpy(), c=steps[batch_steps], alph
 #plt.scatter(delta_theta[diff_mask].numpy(), error_theta[diff_mask].numpy(), color='tab:orange', label='Different cause', alpha=0.7)
 
 plt.axhline(0, color='gray', linestyle='--')
-plt.xlabel('Signed distance θ₂ - θ₁ (rad)')
+plt.xlabel('distance θ₂ - θ₁ (rad)')
 plt.ylabel('Signed error θ (rad)')
 plt.title('Response Bias Relative to Distractor Stimulus')
 plt.grid(True)
@@ -295,3 +299,119 @@ sns.regplot(x="delta_theta",y="error_theta",data=df,x_bins=np.arange(0, 2*torch.
 
 # %%
 
+# Inverse logit (logistic function)
+def inv_logit(x):
+    return 1 / (1 + np.exp(-x))
+
+# Estimate shared likelihood
+def estimate_shared_likelihood(x1, x2, kappa):
+    delta_x = np.abs(x1 - x2)
+    delta_x = np.where(delta_x > np.pi, 2*np.pi - delta_x, delta_x)
+    kappa_eff = 2 * kappa * np.cos(delta_x / 2)
+    marginal_likelihood = besselI(0, kappa_eff) / ((2 * np.pi)**2 * besselI(0, kappa)**2)
+    return {"lik_shared": marginal_likelihood, "kappa_eff": kappa_eff}
+
+# Compute posterior probability of shared cause
+def compute_p_shared(x1, x2, kappa, p=0.5):
+    lik_estimate = estimate_shared_likelihood(x1, x2, kappa)
+    lik_shared = lik_estimate["lik_shared"]
+    lik_indep = (1 / (2 * np.pi))**2
+
+    log_p1 = np.log(p) + np.log(lik_shared)
+    log_p2 = np.log(1 - p) + np.log(lik_indep)
+
+    posterior_prob_shared = inv_logit(log_p1 - log_p2)
+    return posterior_prob_shared
+
+# MAP estimate from mixture of von Mises
+def calc_map(theta, kappa_1, kappa_2, mu_1, mu_2):
+    def d_mixed(x):
+        return theta * vonmises.pdf(x, kappa_1, loc=mu_1) + (1 - theta) * vonmises.pdf(x, kappa_2, loc=mu_2)
+
+    def neg_d_mixed(x):
+        return -d_mixed(x)
+
+    result = minimize_scalar(neg_d_mixed, bounds=(-np.pi, np.pi), method='bounded')
+    return result.x
+
+# %%
+# Compute MAP estimate for each pair of angles
+map_estimates = []
+for i in range(len(theta)):
+    p_shared = compute_p_shared(theta_2[i], theta[i], kappa_tilde, p)
+    mu_shared = (theta_2[i] + theta[i]) / 2
+    mu_shared = mu_shared % (2 * np.pi)  # Ensure mu_shared is within [0, 2π]
+    kappa_eff = 2 * kappa_tilde * np.cos((theta_2[i] - theta[i]) / 2)
+    map_estimate = calc_map(p_shared, kappa_eff, kappa_tilde, mu_shared, theta[i])
+    map_estimate = map_estimate % (2 * np.pi)  # Ensure map_estimate is within [0, 2π]
+    map_estimates.append(map_estimate)
+
+
+
+# %%
+# plot the MAP estimates against the theta_hat
+plt.figure(figsize=(6, 4))
+plt.scatter(theta_hat.numpy(), map_estimates, c=steps[batch_steps], alpha=0.7)
+plt.xlabel('Response θ̂ (rad)')
+plt.ylabel('MAP Estimate θ (rad)')
+plt.title('MAP Estimates vs Response Angles')
+
+
+# %%
+from scipy.stats import vonmises
+from scipy.integrate import quad
+import numpy as np
+
+def calc_circular_mean(theta, kappa_1, kappa_2, mu_1, mu_2):
+    # Mixture PDF
+    def d_mixed(x):
+        return theta * vonmises.pdf(x, kappa_1, loc=mu_1) + (1 - theta) * vonmises.pdf(x, kappa_2, loc=mu_2)
+
+    # Integrate sin(x) * f(x) and cos(x) * f(x)
+    sin_integral = quad(lambda x: np.sin(x) * d_mixed(x), -np.pi, np.pi, limit=100)[0]
+    cos_integral = quad(lambda x: np.cos(x) * d_mixed(x), -np.pi, np.pi, limit=100)[0]
+
+    # Compute circular mean
+    circular_mean = np.arctan2(sin_integral, cos_integral)
+    return circular_mean
+
+
+# %% curve of MAP estimate and posterior circular mean from 0 to 2*pi
+map_estimate_curve = []
+post_circ_mean_curve = []
+delta_x = np.linspace(0, np.pi, 1000)
+
+for x in delta_x:
+    mu_shared = (0 + x) / 2
+    p_shared = compute_p_shared(0, x, kappa_tilde, p)
+    kappa_eff = 2 * kappa_tilde * np.cos((0 - x) / 2)
+    map_estimate_curve.append(calc_map(p_shared, kappa_eff, kappa_tilde, mu_shared, 0))
+    post_circ_mean_curve.append(calc_circular_mean(p_shared, kappa_eff, kappa_tilde, mu_shared, 0))
+
+# %%
+plt.plot(delta_x, map_estimate_curve, color='red', linestyle='--', label='MAP')
+plt.plot(delta_x, post_circ_mean_curve, color='blue', linestyle='--', label='Posterior Circular Mean')
+plt.scatter(delta_theta.numpy(), error_theta.numpy(), alpha=0.7, label='Data Points')
+plt.axhline(0, color='gray', linestyle='--')
+plt.axvline(0, color='gray', linestyle='--')
+plt.xlim(0, np.pi)
+plt.xlabel('Delta θ̂(rad)')
+plt.ylabel('Bias θ (rad)')
+plt.title('MAP and Circular Mean Curves vs Response Angles')
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+# %%
+# plot the circular mean and the binned error_theta (as in the sns regplot above)
+plt.figure(figsize=(6, 4))
+sns.regplot(x="delta_theta", y="error_theta", data=df, x_bins=np.arange(0, 2*torch.pi, torch.pi/20), scatter=True, fit_reg=False)
+plt.plot(delta_x, post_circ_mean_curve, color='blue', linestyle='--', label='Posterior Circular Mean')
+plt.xlabel('Distance θ₂ - θ₁ (rad)')
+plt.ylabel('Signed Error θ (rad)')
+plt.title('Posterior Circular Mean vs Binned Error')
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+# %%
