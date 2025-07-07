@@ -190,6 +190,25 @@ def errors_spatial_2d(rs: T, network_outputs: T, n_a: int):
     return (angle_errors_1 + angle_errors_2).mean(), (magnitudes_errors_1 + magnitudes_errors_2).mean()
 
 
+def loss_function_cosine_similarity(rs: T, network_outputs: T, n_a: int):
+    """
+    Computes the cosine similarity loss between the true and predicted vectors.
+    rs: (batch, N) - true vectors
+    network_outputs: (batch, N, 2) - predicted vectors
+    """
+    angles = rs * 2 * pi / n_a  # shape: (batch, N)
+    true_vectors = torch.stack([angles.cos(), angles.sin()], dim=-1)  # (batch, N, 2)
 
+    # network_outputs: (batch, N, 2)
+    cos_sim = F.cosine_similarity(network_outputs, true_vectors, dim=-1)  # (batch, N)
 
+    # We want to maximize cosine similarity, so we minimize the negative
+    return -cos_sim.mean()  # Mean over batch and N
 # %%
+def loss_function_spatial_non_recurrent(rs: T, network_outputs: T, n_a: int):
+    angles = rs * 2 * pi / n_a
+    xs = angles.cos()
+    ys = angles.sin()
+    x_errors = (network_outputs[:,0] - xs)**2
+    y_errors = (network_outputs[:,1] - ys)**2
+    return (x_errors + y_errors).mean()
