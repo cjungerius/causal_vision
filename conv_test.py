@@ -19,8 +19,8 @@ model.features = model.features[0:2]  # Use only the first two layers for featur
 # %%
 def my_loss(output, target):
     # Loss function that computes the mean squared error, with target being the angle in radians
-    target_x = torch.cos(2 * target)
-    target_y = torch.sin(2 * target)
+    target_x = torch.cos(target)
+    target_y = torch.sin(target)
     output_x = output[:, 0]
     output_y = output[:, 1]
 
@@ -52,34 +52,47 @@ def gabor(size, sigma, theta, Lambda, psi, gamma):
     ) * torch.cos(2 * torch.pi / Lambda * x_theta + psi)
     return gb
 
+# %%
+example_gabor = gabor(232, sigma=.7, theta=torch.pi-2.5, Lambda=1/5, psi=0, gamma=1)
+plt.imshow(example_gabor, cmap='gray')
+
+
+# %%
 def generate_batch(batch_size, p=0.5, kappa=5.0):
     """Generate a batch of Gabor patches."""
 
-    # Von Mises noise distribution
-    vm = VonMises(0, kappa)
+    if p == 0:
+        # testing mode: no noise
+        target_angles = torch.rand(batch_size) * 2 * torch.pi
+        distractor_angles = torch.rand(batch_size) * 2 * torch.pi
+        angles_1 = target_angles
+        angles_2 = distractor_angles
+    else:
+        # Von Mises noise distribution
+        vm = VonMises(0, kappa)
 
-    # Generate ground truth angles uniformly distributed in [0, pi]
-    target_angles = torch.rand(batch_size) * torch.pi
+        # Generate ground truth angles
+        target_angles = torch.rand(batch_size) * 2 * torch.pi
 
-    # Generate distractor angles uniformly distributed in [0, pi]
-    distractor_angles = torch.rand(batch_size) * torch.pi
-    distractor_angles = torch.where(
-        torch.rand(batch_size) < p,
-        target_angles,  # If the random number is less than p, use the target angle
-        distractor_angles  # Otherwise, use a new random angle
-    )
+        # Generate distractor angles
+        distractor_angles = torch.rand(batch_size) * 2 * torch.pi
+        distractor_angles = torch.where(
+            torch.rand(batch_size) < p,
+            target_angles,  # If the random number is less than p, use the target angle
+            distractor_angles  # Otherwise, use a new random angle
+        )
 
-    # Add noise to the target angles
-    noise = vm.sample((batch_size,)) / 2
-    angles_1 = (target_angles + noise)
+        # Add noise to the target angles
+        noise = vm.sample((batch_size,))
+        angles_1 = (target_angles + noise) % (2 * torch.pi)  # Ensure angles are within [0, 2π]
 
-    # Add noise to the distractor angles
-    noise = vm.sample((batch_size,)) / 2
-    angles_2 = (distractor_angles + noise)
+        # Add noise to the distractor angles
+        noise = vm.sample((batch_size,))
+        angles_2 = (distractor_angles + noise) % (2 * torch.pi)  # Ensure angles are within [0, 2π]
     
     # Create Gabor patches for target and distractor angles
-    target_gabors = torch.stack([gabor(232, sigma=.4, theta=angle, Lambda=.1, psi=0, gamma=1) for angle in angles_1])
-    distractor_gabors = torch.stack([gabor(232, sigma=.4, theta=angle, Lambda=.25, psi=0, gamma=1.5) for angle in angles_2])
+    target_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_1])
+    distractor_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_2])
     # Convert to (C, H, W) format
     target_gabors = target_gabors.unsqueeze(1)  # Add channel dimension
     target_gabors = target_gabors.repeat(1, 3, 1, 1)  # Increase color dimensions to 3
@@ -103,8 +116,6 @@ def generate_batch(batch_size, p=0.5, kappa=5.0):
     return features, target_angles, angles_1, angles_2
 
 # %%
-input, labels, _, _ = generate_batch(10)
-# %%
 class MyModel(torch.nn.Module):
     def __init__(self):
         super(MyModel, self).__init__()
@@ -121,27 +132,101 @@ class MyModel(torch.nn.Module):
     
 # %%
 my_model = MyModel()
-output = my_model(input)
 
 # %%
 # Train the model for a few epochs
 optimizer = torch.optim.Adam(my_model.parameters(), lr=0.001)
-batch_size = 32
-num_batches = 1000  # Number of batches to train on
+batch_size = 10
+num_batches = 500  # Number of batches to train on
 p = 4/6  # Probability of distractor being the same as target
 kappa = 5.0  # Concentration parameter for Von Mises distribution
+
+
+# %%
+# Ideal observer functions for training comparison
+def inv_logit(x):
+    return 1 / (1 + np.exp(-x))
+
+def estimate_shared_likelihood(x1, x2, kappa):
+    delta_x = np.abs(x1 - x2)
+    delta_x = np.where(delta_x > np.pi, 2*np.pi - delta_x, delta_x)
+    kappa_eff = 2 * kappa * np.cos(delta_x / 2)
+    marginal_likelihood = besselI(0, kappa_eff) / ((2 * np.pi)**2 * besselI(0, kappa)**2)
+    return {"lik_shared": marginal_likelihood, "kappa_eff": kappa_eff}
+
+def compute_p_shared(x1, x2, kappa, p=0.5):
+    lik_estimate = estimate_shared_likelihood(x1, x2, kappa)
+    lik_shared = lik_estimate["lik_shared"]
+    lik_indep = (1 / (2 * np.pi))**2
+
+    log_p1 = np.log(p) + np.log(lik_shared)
+    log_p2 = np.log(1 - p) + np.log(lik_indep)
+
+    posterior_prob_shared = inv_logit(log_p1 - log_p2)
+    return posterior_prob_shared
+
+def calc_circular_mean_stable(theta, kappa_1, kappa_2, mu_1, mu_2):
+    # Compute characteristic functions
+    r1 = besselI(1, kappa_1) / besselI(0, kappa_1)  # Mean resultant length
+    r2 = besselI(1, kappa_2) / besselI(0, kappa_2)
+    
+    # Complex representation
+    z1 = r1 * np.exp(1j * mu_1)
+    z2 = r2 * np.exp(1j * mu_2)
+    
+    # Mixture characteristic function
+    z_mix = theta * z1 + (1 - theta) * z2
+    
+    # Extract circular mean
+    return np.angle(z_mix)
+
+def compute_circular_mean(angle1, angle2):
+    """Compute circular mean of two angles"""
+    # Convert to unit vectors and average
+    x = np.cos(angle1) + np.cos(angle2)
+    y = np.sin(angle1) + np.sin(angle2)
+    return np.arctan2(y, x)
+
+def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p_prior):
+    """Compute ideal observer estimates for a batch of inputs"""
+    estimates = []
+
+    first_np = first_inputs.numpy()
+    second_np = second_inputs.numpy()
+    
+    for i in range(len(first_np)):
+        p_shared = compute_p_shared(first_np[i], second_np[i], kappa_tilde, p_prior)
+        # Correctly compute circular mean for shared cause
+        mu_shared = compute_circular_mean(first_np[i], second_np[i])
+        mu_shared = mu_shared % (2 * np.pi)
+        
+        delta_x = abs(first_np[i] - second_np[i])
+        delta_x = np.where(delta_x > np.pi, 2 * np.pi - delta_x, delta_x)
+        kappa_eff = 2 * kappa_tilde * np.cos(delta_x / 2)
+        
+        circ_mean = calc_circular_mean_stable(p_shared, kappa_eff, kappa_tilde, mu_shared, first_np[i])
+        circ_mean = circ_mean % (2 * np.pi)
+        estimates.append(circ_mean)
+    
+    return torch.tensor(estimates)
 
 # %%
 for b in tqdm(range(num_batches)):
     optimizer.zero_grad()
-    input, labels, _, _ = generate_batch(batch_size, p, kappa)
+    input, labels, angles_1, angles_2 = generate_batch(batch_size, p, kappa)
     output = my_model(input)
     loss = my_loss(output, labels)
     loss.backward()
     optimizer.step()
 
     if (b + 1) % 100 == 0:
+        # calculate ideal observer loss:
+        ideal_angles = compute_ideal_observer_estimates(angles_1, angles_2, kappa, p)
+        ideal_estimates = torch.stack([torch.cos(ideal_angles), torch.sin(ideal_angles)], dim=1)
+        ideal_loss = my_loss(ideal_estimates, labels)
         print(f'Epoch {b+1}, Loss: {loss.item()}')
+        print(f'Ideal Observer Loss: {ideal_loss.item()}')
+
 
 # %%
 # Test the model
@@ -154,22 +239,26 @@ with torch.no_grad():
     angles_2 = torch.zeros(test_batch_size)
     output = torch.zeros(test_batch_size, 2)
     for i in range(0, test_batch_size, chunk_size):
-        input_chunk, label_chunk, angle_1_chunk, angle_2_chunk = generate_batch(chunk_size, p=0, kappa=1000.0)
+        input_chunk, label_chunk, angle_1_chunk, angle_2_chunk = generate_batch(chunk_size, p=0, kappa=10000.0)
         output[i:i+chunk_size] = my_model(input_chunk)
         labels[i:i+chunk_size] = label_chunk
         angles_1[i:i+chunk_size] = angle_1_chunk
         angles_2[i:i+chunk_size] = angle_2_chunk
 
     loss = my_loss(output, labels)
+    ideal_angles = compute_ideal_observer_estimates(angles_1, angles_2, kappa, p)
+    ideal_estimates = torch.stack([torch.cos(ideal_angles), torch.sin(ideal_angles)], dim=1)
+    ideal_loss = my_loss(ideal_estimates, labels)
     print(f'Test Loss: {loss.item()}')
+    print(f'Ideal Observer Test Loss: {ideal_loss.item()}')
 
 # %%
 # Visualize the output
 import matplotlib.pyplot as plt
-output_angles = torch.atan2(output[:, 1], output[:, 0]) % (2 * torch.pi) / 2
+output_angles = torch.atan2(output[:, 1], output[:, 0]) % (2 * torch.pi)
 plt.figure(figsize=(10, 5))
 plt.scatter(labels.numpy(), output_angles.numpy(), alpha=0.5)
-plt.plot([0, torch.pi], [0, torch.pi], color='red', linestyle='--')  # Diagonal line
+plt.plot([0, 2* torch.pi], [0, 2 * torch.pi], color='red', linestyle='--')  # Diagonal line
 plt.xlabel('True Angles (radians)')
 plt.ylabel('Predicted Angles (radians)')
 plt.title('True vs Predicted Angles')
@@ -179,8 +268,8 @@ plt.title('True vs Predicted Angles')
 # Plot angle bias as a function of the distance between target and distractor angles
 
 def circular_distance(b1, b2):
-    r = (b2 - b1) % (torch.pi)
-    r = torch.where(r >= (torch.pi / 2), r - torch.pi, r)
+    r = (b2 - b1) % (2 * torch.pi)
+    r = torch.where(r >= torch.pi, r - 2 * torch.pi, r)
     return r
 
 
@@ -237,8 +326,8 @@ def func_scalar(x, kappa, p):
 
 func = np.vectorize(func_scalar)
 
-xdata = angle_diffs.numpy()*2
-ydata = angle_error.numpy()*2
+xdata = angle_diffs.numpy()
+ydata = angle_error.numpy()
 # Fit the function to the data
 from scipy.optimize import curve_fit
 
@@ -247,9 +336,9 @@ popt, pcov = curve_fit(func, xdata, ydata, p0=[kappa, p], bounds=([0, 0], [np.in
 
 # %%
 plt.figure(figsize=(10, 5))
-plt.scatter(xdata/2, ydata, alpha=0.5)
-plt.plot(xdata[np.argsort(xdata)]/2, func(xdata[np.argsort(xdata)], *popt), 'r-', label='Fitted function, kappa={:.2f}, p={:.2f}'.format(popt[0], popt[1]))
-plt.plot(xdata[np.argsort(xdata)]/2, func(xdata[np.argsort(xdata)], kappa, p), 'b--', label='Posterior Circular Mean (kappa={:.2f}, p={:.2f})'.format(kappa, p))
+plt.scatter(xdata, ydata, alpha=0.5)
+plt.plot(xdata[np.argsort(xdata)], func(xdata[np.argsort(xdata)], *popt), 'r-', label='Fitted function, kappa={:.2f}, p={:.2f}'.format(popt[0], popt[1]))
+plt.plot(xdata[np.argsort(xdata)], func(xdata[np.argsort(xdata)], kappa, p), 'b--', label='Posterior Circular Mean (kappa={:.2f}, p={:.2f})'.format(kappa, p))
 plt.xlabel('Angle Difference (radians)')
 plt.ylabel('Prediction Error (radians)')
 plt.legend()
