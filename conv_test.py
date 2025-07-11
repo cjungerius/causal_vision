@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.distributions import VonMises
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 # %%
 # Load the ConvNeXt model with pretrained weights
 model = convnext_base(weights=ConvNeXt_Base_Weights.DEFAULT)
@@ -13,7 +14,7 @@ model = convnext_base(weights=ConvNeXt_Base_Weights.DEFAULT)
 model.eval()
 weights = ConvNeXt_Base_Weights.DEFAULT
 preprocess = weights.transforms()
-model.features = model.features[0:2]  # Use only the first two layers for feature extraction
+model.features = model.features[0:3]  # Use only the first two layers for feature extraction
 
 
 # %%
@@ -53,15 +54,10 @@ def gabor(size, sigma, theta, Lambda, psi, gamma):
     return gb
 
 # %%
-example_gabor = gabor(232, sigma=.7, theta=torch.pi-2.5, Lambda=1/5, psi=0, gamma=1)
-plt.imshow(example_gabor, cmap='gray')
-
-
-# %%
 def generate_batch(batch_size, p=0.5, kappa=5.0):
     """Generate a batch of Gabor patches."""
 
-    if p == 0:
+    if p == -1:
         # testing mode: no noise
         target_angles = torch.rand(batch_size) * 2 * torch.pi
         distractor_angles = torch.rand(batch_size) * 2 * torch.pi
@@ -84,11 +80,10 @@ def generate_batch(batch_size, p=0.5, kappa=5.0):
 
         # Add noise to the target angles
         noise = vm.sample((batch_size,))
-        angles_1 = (target_angles + noise) % (2 * torch.pi)  # Ensure angles are within [0, 2π]
-
+        angles_1 = (target_angles + noise) % (2 * torch.pi)  
         # Add noise to the distractor angles
         noise = vm.sample((batch_size,))
-        angles_2 = (distractor_angles + noise) % (2 * torch.pi)  # Ensure angles are within [0, 2π]
+        angles_2 = (distractor_angles + noise) % (2 * torch.pi) 
     
     # Create Gabor patches for target and distractor angles
     target_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_1])
@@ -97,20 +92,18 @@ def generate_batch(batch_size, p=0.5, kappa=5.0):
     target_gabors = target_gabors.unsqueeze(1)  # Add channel dimension
     target_gabors = target_gabors.repeat(1, 3, 1, 1)  # Increase color dimensions to 3
     target_gabors = preprocess(target_gabors)
-    distractor_gabors = distractor_gabors.unsqueeze(1)  # Add channel dimension
-    distractor_gabors = distractor_gabors.repeat(1, 3, 1, 1)  # Increase color dimensions to 3
+    distractor_gabors = distractor_gabors.unsqueeze(1)  
+    distractor_gabors = distractor_gabors.repeat(1, 3, 1, 1)
     distractor_gabors = preprocess(distractor_gabors)
 
-    # Forward pass to get the activations for the batch
     with torch.no_grad():
-        target_features = model.features[0:2](target_gabors)
-        distractor_features = model.features[0:2](distractor_gabors)
+        target_features = model.features(target_gabors)
+        distractor_features = model.features(distractor_gabors)
         target_features = model.avgpool(target_features)
         distractor_features = model.avgpool(distractor_features)
         target_features = torch.flatten(target_features, 1)
         distractor_features = torch.flatten(distractor_features, 1)
 
-    # Pair target and distractor features correctly
     features = torch.cat((target_features, distractor_features), dim=1)
     
     return features, target_angles, angles_1, angles_2
@@ -119,7 +112,7 @@ def generate_batch(batch_size, p=0.5, kappa=5.0):
 class MyModel(torch.nn.Module):
     def __init__(self):
         super(MyModel, self).__init__()
-        self.fc1 = torch.nn.Linear(256, 512)
+        self.fc1 = torch.nn.Linear(512, 512)
         self.fc2 = torch.nn.Linear(512, 128)
         self.fc3 = torch.nn.Linear(128, 2)
 
@@ -137,9 +130,11 @@ my_model = MyModel()
 # Train the model for a few epochs
 optimizer = torch.optim.Adam(my_model.parameters(), lr=0.001)
 batch_size = 10
-num_batches = 500  # Number of batches to train on
+num_batches = 500  
 p = 4/6  # Probability of distractor being the same as target
 kappa = 5.0  # Concentration parameter for Von Mises distribution
+model_losses = []
+ideal_losses = []
 
 
 # %%
@@ -196,7 +191,6 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
     
     for i in range(len(first_np)):
         p_shared = compute_p_shared(first_np[i], second_np[i], kappa_tilde, p_prior)
-        # Correctly compute circular mean for shared cause
         mu_shared = compute_circular_mean(first_np[i], second_np[i])
         mu_shared = mu_shared % (2 * np.pi)
         
@@ -211,6 +205,7 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
     return torch.tensor(estimates)
 
 # %%
+
 for b in tqdm(range(num_batches)):
     optimizer.zero_grad()
     input, labels, angles_1, angles_2 = generate_batch(batch_size, p, kappa)
@@ -219,13 +214,48 @@ for b in tqdm(range(num_batches)):
     loss.backward()
     optimizer.step()
 
+    ideal_angles = compute_ideal_observer_estimates(angles_1, angles_2, kappa, p)
+    ideal_estimates = torch.stack([torch.cos(ideal_angles), torch.sin(ideal_angles)], dim=1)
+    ideal_loss = my_loss(ideal_estimates, labels)
+    
+    model_losses.append(loss.item())
+    ideal_losses.append(ideal_loss.item())
+
+
     if (b + 1) % 100 == 0:
-        # calculate ideal observer loss:
-        ideal_angles = compute_ideal_observer_estimates(angles_1, angles_2, kappa, p)
-        ideal_estimates = torch.stack([torch.cos(ideal_angles), torch.sin(ideal_angles)], dim=1)
-        ideal_loss = my_loss(ideal_estimates, labels)
-        print(f'Epoch {b+1}, Loss: {loss.item()}')
-        print(f'Ideal Observer Loss: {ideal_loss.item()}')
+        plt.close('all')
+        # Create a comprehensive training analysis plot
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
+
+        # Plot 1: Loss progression
+        ax1.plot(model_losses, 'b-', label='Model Loss', linewidth=2)
+        ax1.plot(ideal_losses, 'r-', label='Ideal Observer Loss', linewidth=2)
+        ax1.set_xlabel('Batch Number')
+        ax1.set_ylabel('Loss')
+        ax1.set_title('Training Loss Progression')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+
+        # Plot 2: Loss ratio over time
+        loss_ratios = [m/i for m, i in zip(model_losses, ideal_losses)]
+        ax2.plot(loss_ratios, 'g-', linewidth=2)
+        ax2.axhline(y=1, color='r', linestyle='--', alpha=0.7, label='Perfect Performance (ratio=1)')
+        ax2.set_xlabel('Batch Number')
+        ax2.set_ylabel('Loss Ratio (Model/Ideal)')
+        ax2.set_title('Model Performance Relative to Ideal Observer')
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+
+
+        plt.tight_layout()
+        plt.savefig('training_analysis.png', dpi=300, bbox_inches='tight')
+        plt.show()
+
+plt.close('all')
+
+print(f"\nTraining completed! Final losses:")
+print(f"Model Loss: {model_losses[-1]:.4f}")
+print(f"Ideal Observer Loss: {ideal_losses[-1]:.4f}")
 
 
 # %%
@@ -239,7 +269,7 @@ with torch.no_grad():
     angles_2 = torch.zeros(test_batch_size)
     output = torch.zeros(test_batch_size, 2)
     for i in range(0, test_batch_size, chunk_size):
-        input_chunk, label_chunk, angle_1_chunk, angle_2_chunk = generate_batch(chunk_size, p=0, kappa=10000.0)
+        input_chunk, label_chunk, angle_1_chunk, angle_2_chunk = generate_batch(chunk_size, p=-1)
         output[i:i+chunk_size] = my_model(input_chunk)
         labels[i:i+chunk_size] = label_chunk
         angles_1[i:i+chunk_size] = angle_1_chunk
@@ -262,6 +292,7 @@ plt.plot([0, 2* torch.pi], [0, 2 * torch.pi], color='red', linestyle='--')  # Di
 plt.xlabel('True Angles (radians)')
 plt.ylabel('Predicted Angles (radians)')
 plt.title('True vs Predicted Angles')
+plt.show()
 
 
 # %%
@@ -276,8 +307,8 @@ def circular_distance(b1, b2):
 
 angle_diffs = circular_distance(angles_2, angles_1)
 angle_error = circular_distance(output_angles, labels)
-angle_error = torch.where(angle_diffs < 0, - angle_error, angle_error)  # Ensure positive error for positive angle differences
-angle_diffs = torch.abs(angle_diffs)
+#angle_error = torch.where(angle_diffs < 0, - angle_error, angle_error)  # Ensure positive error for positive angle differences
+#angle_diffs = torch.abs(angle_diffs)
 
 # Inverse logit (logistic function)
 def inv_logit(x):
@@ -342,5 +373,9 @@ plt.plot(xdata[np.argsort(xdata)], func(xdata[np.argsort(xdata)], kappa, p), 'b-
 plt.xlabel('Angle Difference (radians)')
 plt.ylabel('Prediction Error (radians)')
 plt.legend()
+plt.show()
+
+# %%
+
 
 # %%
