@@ -1,16 +1,12 @@
 import numpy as np
 from scipy.special import iv as besselI
 import torch
-import torch.nn.functional as F
 from torch import randn
 from torch.distributions import VonMises
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
 import matplotlib.pyplot as plt
-from section_6.rate_rnn_with_io import ReluRateRNNWithIO
 from section_chris.ReluRNNLayer import MyRNN
-from section_6.utils import generate_blank_sensory_input, generate_sensory_input_spatial, loss_function_spatial, errors_spatial, loss_function_non_spatial
-from section_chris.utils_chris import generate_batch_of_continuous_wm_targets, generate_sensory_input_2d_vonmises, loss_function_2d_vonmises, errors_spatial_2d, generate_same_different, loss_function_cosine_similarity
-from tqdm import tqdm
+from section_6.utils import generate_blank_sensory_input, errors_spatial
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -122,7 +118,7 @@ def generate_batch(batch_size, p=0.5, kappa=5.0):
 dt = 0.01
 tau = 0.25  # time constant for the RNN dynamics
 n_a = 128 # input size
-N = 300 
+N = 400 
 batch_size = 200
 rnn = MyRNN(n_a, N, 2, dt, tau)
 rnn.to(device)
@@ -130,7 +126,7 @@ rnn.to(device)
 ## Define training machinery
 lr = 5e-4  # Reduced learning rate for larger network
 opt = torch.optim.Adam(rnn.parameters(), lr)
-num_batches = 2000
+num_batches = 5000
 losses = [] # Store for loss curve plotting
 dim1_errs = [] # Store for accuracies curve plotting
 dim2_errs = []
@@ -230,11 +226,12 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
 network_losses = []  # Store for network loss
 optimal_losses = []  # Store for optimal loss
 
-for b in tqdm(range(num_batches)):
+for b in range(num_batches):
 
     opt.zero_grad()
 
-    first_input, second_input, target_angles, first_angles, second_angles = generate_batch(batch_size, p, kappa_tilde)
+    #flip first and second here to change whether the network should focus on the first or second period (the first argument==the target period)
+    second_input, first_input, target_angles, second_angles, first_angles = generate_batch(batch_size, p, kappa_tilde)
     first_input = first_input.to(device)
     second_input = second_input.to(device)
     target_angles = target_angles.to(device)
@@ -284,7 +281,7 @@ for b in tqdm(range(num_batches)):
     loss = my_loss(all_network_outputs, target_angles)
     
     # Compute ideal observer loss for comparison
-    ideal_estimates = compute_ideal_observer_estimates(first_angles.to("cpu"), second_angles.to("cpu"), kappa_tilde, p)
+    ideal_estimates = compute_ideal_observer_estimates(second_angles.to("cpu"), first_angles.to("cpu"), kappa_tilde, p)
     # Convert ideal estimates to 2D output format for loss computation
     ideal_angles = ideal_estimates
     ideal_x = torch.cos(ideal_angles).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
