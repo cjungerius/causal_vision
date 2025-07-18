@@ -1,0 +1,50 @@
+#!/bin/bash
+
+#! sbatch directives
+
+#SBATCH -J gpu_test_job
+#SBATCH -A BAYS-SL3-GPU
+#SBATCH -p ampere
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:1
+#SBATCH --time=02:00:00
+
+
+#! prep environment
+
+. /etc/profile.d/modules.sh
+module purge
+module load rhel8/default-amp
+module load miniconda
+
+eval "$(conda shell.bash hook)"
+
+workdir="$SLURM_SUBMIT_DIR"
+
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
+# Do task stuff
+cd $workdir
+
+echo -e "Changed directory to `pwd`.\n"
+
+JOBID=$SLURM_JOB_ID
+
+echo -e "JobID: $JOBID\n======"
+echo "Time: `date`"
+echo "Running on master node: `hostname`"
+echo "Current directory: `pwd`"
+
+if [ "$SLURM_JOB_NODELIST" ]; then
+        #! Create a machine file:
+        export NODEFILE=`generate_pbs_nodefile`
+        cat $NODEFILE | uniq > machine.file.$JOBID
+        echo -e "\nNodes allocated:\n================"
+        echo `cat machine.file.$JOBID | sed -e 's/\..*$//g'`
+fi
+
+conda run -n causal_vision python conv_rnn_cluster.py
