@@ -86,7 +86,7 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
         distractor_colors = torch.rand(batch_size) * 2 * torch.pi
         
         p_color_match = p + q * (1-p)
-        p_color_diff = p - q * p
+        p_color_diff = p - q * (1-p)
 
         match_ori = torch.rand(batch_size) < p
         distractor_angles = torch.where(match_ori, target_angles, distractor_angles)
@@ -160,7 +160,7 @@ rnn.to(device)
 ## Define training machinery
 lr = 5e-4  # Reduced learning rate for larger network
 opt = torch.optim.Adam(rnn.parameters(), lr)
-num_batches = 500
+num_batches = 3000
 losses = [] # Store for loss curve plotting
 dim1_errs = [] # Store for accuracies curve plotting
 dim2_errs = []
@@ -260,7 +260,7 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
 network_losses = []  # Store for network loss
 optimal_losses = []  # Store for optimal loss
 
-for b in tqdm(range(num_batches)):
+for b in range(num_batches):
 
     opt.zero_grad()
 
