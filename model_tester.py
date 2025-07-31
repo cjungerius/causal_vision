@@ -1,3 +1,4 @@
+# %%
 import numpy as np
 from scipy.special import iv as besselI
 import torch
@@ -6,8 +7,10 @@ from torch.distributions import VonMises
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
 import matplotlib.pyplot as plt
 from section_chris.ReluRNNLayer import MyRNN
-from section_6.utils import generate_blank_sensory_input, errors_spatial
+from section_6.utils import generate_blank_sensory_input
 from skimage.color import lab2rgb
+import pandas as pd
+import seaborn as sns
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -23,18 +26,6 @@ model.features = model.features[0:3]  # Use only the first two layers for featur
 model.to(device)
 
 # %%
-def my_loss(output, target):
-    # Loss function that computes the mean squared error, with target being the angle in radians
-    target_x = torch.cos(target).unsqueeze(-1)
-    target_y = torch.sin(target).unsqueeze(-1)
-    output_x = output[:, :, 0]
-    output_y = output[:, :, 1]
-
-    x_errors = (output_x - target_x)**2
-    y_errors = (output_y - target_y)**2
-    return (x_errors + y_errors).mean()
-
-
 
 def gabor(size, sigma, theta, Lambda, psi, gamma):
     """Draw a gabor patch."""
@@ -48,7 +39,7 @@ def gabor(size, sigma, theta, Lambda, psi, gamma):
     # Bounding box
     s = torch.linspace(-1, 1, size)
 
-    (x, y) = torch.meshgrid(s, s)
+    (x, y) = torch.meshgrid(s, s, indexing='ij')
 
     # Rotation
     x_theta = x * torch.cos(theta) + y * torch.sin(theta)
@@ -66,13 +57,12 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
     if p == -1:
         # testing mode: no noise
         target_angles = torch.rand(batch_size) * 2 * torch.pi
-        target_colors = torch.rand(batch_size) * 2 * torch.pi
+        colors_1 = torch.rand(batch_size) * 2 * torch.pi
+        colors_2 = torch.rand(batch_size) * 2 * torch.pi
         distractor_angles = torch.rand(batch_size) * 2 * torch.pi
-        distractor_colors = torch.rand(batch_size) * 2 * torch.pi
-        angles_1 = target_angles
-        angles_2 = distractor_angles
-        colors_1 = target_colors
-        colors_2 = distractor_colors
+        angles_1 = target_angles.clone().detach()
+        angles_2 = distractor_angles.clone().detach()
+
     else:
         # Von Mises noise distribution
         vm = VonMises(0, kappa)
@@ -83,18 +73,22 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
         # Generate distractor angles
         distractor_angles = torch.rand(batch_size) * 2 * torch.pi
         distractor_colors = torch.rand(batch_size) * 2 * torch.pi
-
-        probability_vector = torch.tensor([
-            p * p + q * np.sqrt(p ** 2 * (1 - p) ** 2),
-            p * (1 - p) - q * np.sqrt(p ** 2 * (1 - p) ** 2),
-            (1 - p) * p - q * np.sqrt(p ** 2 * (1 - p) ** 2),
-            (1 - p) ** 2 + q * np.sqrt(p ** 2 * (1 - p) ** 2)
-        ])
-
-        class_vector = probability_vector.multinomial(batch_size, replacement=True)
         
-        distractor_angles = torch.where(torch.logical_or(class_vector == 0, class_vector == 1) , target_angles, distractor_angles)
-        distractor_colors = torch.where(torch.logical_or(class_vector == 0, class_vector == 2), target_colors, distractor_colors)
+        p_color_match = p + q * (1-p)
+        p_color_diff = p - q * (1-p)
+
+        match_ori = torch.rand(batch_size) < p
+        distractor_angles = torch.where(match_ori, target_angles, distractor_angles)
+
+        # Decide whether the second pair matches
+        rand_color = torch.rand(batch_size)
+        match_color = torch.where(
+            match_ori,
+            rand_color < p_color_match,
+            rand_color < p_color_diff
+        )
+
+        distractor_colors = torch.where(match_color, target_colors, distractor_colors)
 
         # Add noise to the target angles
         noise = vm.sample((batch_size,))
@@ -106,8 +100,17 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
         angles_2 = (distractor_angles + noise) % (2 * torch.pi) 
         noise = vm.sample((batch_size,))
         colors_2 = (distractor_colors + noise) % (2 * torch.pi)
-    
-    # Convert to (C, H, W) f    # Create Gabor patches for target and distractor angles
+
+    # adjust for testing mode: distractor colors are always the same as target colors
+    if q == 1:
+        colors_2 = colors_1.clone().detach()
+        print("colors cloned!")
+    elif q == -1:
+        colors_2 = (colors_1 + torch.pi) % (2 * torch.pi)
+        print("colors flipped!")
+
+    # Convert to (C, H, W) format
+    # Create Gabor patches for target and distractor angles
     target_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_1])
     target_gabors += 1
     target_gabors /= 2
@@ -140,8 +143,9 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
         target_features = torch.flatten(target_features, 1)
         distractor_features = torch.flatten(distractor_features, 1)
 
-    return target_features, distractor_features, target_colors, colors_1, colors_2
+    return target_features, distractor_features, target_angles, angles_1, angles_2, colors_1, colors_2
 
+# %%
 
 ## Define our system
 dt = 0.01
@@ -151,14 +155,14 @@ N = 400
 batch_size = 100
 rnn = MyRNN(n_a, N, 2, dt, tau)
 rnn.to(device)
+rnn.init_hidden(batch_size)
 
-## Define training machinery
-lr = 5e-4  # Reduced learning rate for larger network
-opt = torch.optim.Adam(rnn.parameters(), lr)
-num_batches = 5000
-losses = [] # Store for loss curve plotting
-dim1_errs = [] # Store for accuracies curve plotting
-dim2_errs = []
+# load saved parameters if available
+try:
+    rnn.load_state_dict(torch.load("cnn_rnn_gabor_2d_model.pth", map_location=device))
+    print("Loaded saved RNN parameters.")
+except FileNotFoundError:
+    print("No saved RNN parameters found. Starting with random initialization.")
 
 ## Define simulation parameters
 T_prestim = 0.1     # in seconds
@@ -177,14 +181,8 @@ kappa_tilde = 7 # von Mises concentration parameter for the sensory input
 # noise generating von mises distribution
 noise_dist = VonMises(0, kappa_tilde)
 p = 2/5
-q = 3/5
-eps1 = 0.9
-eps2 = (1 - eps1**2) ** 0.5
-C = .01
 
-## Initialise simulation, including the first noise term
-eta_tilde = torch.randn(batch_size, N)
-eta_tilde = eta_tilde.to(device)
+
 # %%
 # Ideal observer functions for training comparison
 def inv_logit(x):
@@ -252,19 +250,47 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
     
     return torch.tensor(estimates)
 
-network_losses = []  # Store for network loss
-optimal_losses = []  # Store for optimal loss
 
-for b in range(num_batches):
+# %%
+# generate test batch
 
-    opt.zero_grad()
+model.eval()
+batch_size = 500
 
-    #flip first and second here to change whether the network should focus on the first or second period (the first argument==the target period)
-    second_input, first_input, target_angles, second_angles, first_angles = generate_batch(batch_size, p, kappa_tilde, q)
-    first_input = first_input.to(device)
-    second_input = second_input.to(device)
-    target_angles = target_angles.to(device)
+eps1 = 0.9
+eps2 = (1 - eps1**2) ** 0.5
+C = .01
 
+## Initialise simulation, including the first noise term
+eta_tilde = torch.randn(batch_size, N)
+eta_tilde = eta_tilde.to(device)
+
+
+#flip first and second here to change whether the network should focus on the first or second period (the first argument==the target period)
+second_input, first_input, target_angles, second_angles, first_angles, second_colors, first_colors = generate_batch(batch_size, -1, kappa_tilde, -1)
+first_input = first_input.to(device)
+second_input = second_input.to(device)
+target_angles = target_angles.to(device)
+#concatenate with a batch where q == 1, so that the distractor colors are the same as the target colors
+second_input_2, first_input_2, target_angles_2, second_angles_2, first_angles_2, second_colors_2, first_colors_2 = generate_batch(batch_size, -1, kappa_tilde, 1)
+first_input_2 = first_input_2.to(device)
+second_input_2 = second_input_2.to(device)
+target_angles_2 = target_angles_2.to(device)
+# concatenate the two batches
+first_input = torch.cat((first_input, first_input_2), dim=0)
+second_input = torch.cat((second_input, second_input_2), dim=0)
+target_angles = torch.cat((target_angles, target_angles_2), dim=0)
+second_angles = torch.cat((second_angles, second_angles_2), dim=0)
+first_angles = torch.cat((first_angles, first_angles_2), dim=0)
+second_colors = torch.cat((second_colors, second_colors_2), dim=0)
+first_colors = torch.cat((first_colors, first_colors_2), dim=0)
+
+
+batch_size = batch_size * 2  # since we concatenated two batches
+# %%
+
+
+with torch.no_grad():
     rnn.init_hidden(batch_size)
 
     prestim_sensory_input = generate_blank_sensory_input(n_a, True, batch_size)[:,:-1].to(device)
@@ -306,99 +332,133 @@ for b in range(num_batches):
         voltage, network_output = rnn.step(resp_sensory_input, eta, return_output=True)
         batch_network_outputs.append(network_output)
 
-    all_network_outputs = torch.stack(batch_network_outputs, 1)
-    loss = my_loss(all_network_outputs, target_angles)
-    
-    # Compute ideal observer loss for comparison
-    ideal_estimates = compute_ideal_observer_estimates(second_angles.to("cpu"), first_angles.to("cpu"), kappa_tilde, p)
-    # Convert ideal estimates to 2D output format for loss computation
-    ideal_angles = ideal_estimates
-    ideal_x = torch.cos(ideal_angles).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
-    ideal_y = torch.sin(ideal_angles).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
-    ideal_outputs = torch.cat([ideal_x, ideal_y], dim=2)
-    ideal_loss = my_loss(ideal_outputs, target_angles.to("cpu"))
-    
-    loss.backward()
-    opt.step()
+    test_trial_outputs = torch.stack(batch_network_outputs, 1).detach().cpu()
 
-    x_err, y_err = errors_spatial(target_angles.to("cpu"), all_network_outputs.detach().to("cpu"), 2 * torch.pi)
+# %%
 
-    losses.append(loss.item())
-    network_losses.append(loss.item())
-    optimal_losses.append(ideal_loss.item())
-    dim1_errs.append(x_err.item())
-    dim2_errs.append(y_err.item())
+mean_vector = test_trial_outputs.mean(dim=1)  # [batch, 2]
 
-    if b % 200 == 0:
-        plt.close('all')
-        fig, axes = plt.subplots(4, figsize=(10, 12))
+x, y = mean_vector[:, 0], mean_vector[:, 1]
+theta_hat = torch.atan2(y, x) % (2 * torch.pi)  # ensure theta in [0, 2π)
 
-        axes[0].plot(losses[50:], label='Network Loss')
-        if len(optimal_losses) > 50:
-            axes[0].plot(optimal_losses[50:], label='Ideal Observer Loss')
-        axes[0].legend()
-        axes[0].set_title('Loss Comparison')
-        
-        axes[1].plot(dim1_errs[50:])
-        axes[1].set_title('Angle Errors')
-        
-        axes[2].plot(dim2_errs[50:])
-        axes[2].set_title('Magnitude Errors')
-        
-        # Plot loss gap
-        if len(optimal_losses) > 50:
-            loss_gap = np.array(network_losses[50:]) - np.array(optimal_losses[50:])
-            axes[3].plot(loss_gap)
-            axes[3].set_title('Performance Gap (Network - Ideal)')
-            axes[3].set_ylabel('Loss Difference')
 
-        print(f"Batch {b}: Network Loss: {losses[-1]:.4f}, Ideal Loss: {optimal_losses[-1]:.4f}")
-        fig.savefig('grid_losses.png')
+theta = second_angles 
+theta_2 = first_angles 
 
-# Final comparison plot
-plt.figure(figsize=(12, 8))
+color = second_colors
+color_2 = first_colors
 
-plt.subplot(2, 2, 1)
-plt.plot(network_losses, label='Network Loss', alpha=0.7)
-plt.plot(optimal_losses, label='Ideal Observer Loss', alpha=0.7)
-plt.xlabel('Training Batch')
-plt.ylabel('Loss')
-plt.legend()
-plt.title('Network vs Ideal Observer Performance')
 
-plt.subplot(2, 2, 2)
-loss_gap = np.array(network_losses) - np.array(optimal_losses)
-plt.plot(loss_gap)
-plt.xlabel('Training Batch')
-plt.ylabel('Loss Difference')
-plt.title('Performance Gap (Network - Ideal)')
+fig, ax = plt.subplots(2)
+ax[0].scatter(theta,theta_hat)
+ax[1].scatter(theta_2,theta_hat)
 
-plt.subplot(2, 2, 3)
-plt.plot(network_losses, label='Network Loss', alpha=0.7)
-plt.plot(optimal_losses, label='Ideal Observer Loss', alpha=0.7)
-plt.xlabel('Training Batch')
-plt.ylabel('Loss')
-plt.legend()
-plt.title('Network vs Ideal Observer Performance (Log Scale)')
-plt.yscale('log')
+# %%
+def circular_distance(b1, b2):
+    r = (b2 - b1) % (2*torch.pi)
+    r = torch.where(r >= torch.pi, r - 2*torch.pi, r)
+    return r
 
-plt.subplot(2, 2, 4)
-# Rolling average of gap
-window_size = 100
-if len(loss_gap) > window_size:
-    rolling_gap = np.convolve(loss_gap, np.ones(window_size)/window_size, mode='valid')
-    plt.plot(rolling_gap)
-    plt.xlabel('Training Batch')
-    plt.ylabel('Rolling Average Loss Difference')
-    plt.title(f'Smoothed Performance Gap (window={window_size})')
+# Compute signed angle differences
+delta_theta = circular_distance(theta_2, theta)        # Direction θ₂ - θ₁
+error_theta = circular_distance(theta_hat, theta)      # Direction θ̂ - θ₁
+delta_color = circular_distance(color_2, color)            # Direction color₂ - color₁
 
+#error_theta = torch.where(delta_theta < 0, -1*error_theta, error_theta)
+#delta_theta = torch.where(delta_theta < 0, -1*delta_theta, delta_theta)
+
+delta_color = torch.where(delta_color < 0, -1*delta_color, delta_color)
+color_near_far = torch.where(delta_color < torch.pi/2, 1, 0)  # 1 if near, 0 if far
+
+plt.figure(figsize=(6, 4))
+plt.scatter(delta_theta.numpy(), error_theta.numpy(), alpha=0.7, c=color_near_far)
+plt.xlim(-torch.pi, torch.pi)
+plt.ylim(-0.3, 0.3)
+
+plt.axhline(0, color='gray', linestyle='--')
+plt.xlabel('distance θ₂ - θ₁ (rad)')
+plt.ylabel('Signed error θ (rad)')
+plt.title('Response Bias Relative to Distractor Stimulus')
+plt.grid(True)
 plt.tight_layout()
-plt.savefig('training_comparison.png', dpi=150, bbox_inches='tight')
+plt.show()
+# %%
 
-print(f"Final Network Loss: {network_losses[-1]:.6f}")
-print(f"Final Ideal Observer Loss: {optimal_losses[-1]:.6f}")
-print(f"Final Performance Gap: {loss_gap[-1]:.6f}")
-print(f"Mean Performance Gap: {np.mean(loss_gap):.6f}")
-print(f"Std Performance Gap: {np.std(loss_gap):.6f}")
+df = pd.DataFrame({"delta_theta": delta_theta, "error_theta": error_theta, "dist": color_near_far})
+# regplot split by dist
+sns.regplot(x="delta_theta", y="error_theta", data=df[df["dist"] == 1], x_bins=np.arange(-torch.pi, torch.pi, torch.pi/10), scatter=True, fit_reg=False, label="Near")
+sns.regplot(x="delta_theta", y="error_theta", data=df[df["dist"] == 0], x_bins=np.arange(-torch.pi, torch.pi, torch.pi/10), scatter=True, fit_reg=False, label="Far")
+plt.xlabel('distance θ₂ - θ₁ (rad)')
+plt.ylabel('Signed error θ (rad)')
+plt.title('Response Bias Relative to Distractor Stimulus')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
 
-torch.save(rnn.state_dict(), 'cnn_rnn_gabor_2d_model.pth')
+# %%
+
+def circular_mean_window(angles: torch.Tensor) -> torch.Tensor:
+    sin_sum = torch.sin(angles).mean(dim=0)
+    cos_sum = torch.cos(angles).mean(dim=0)
+    return torch.atan2(sin_sum, cos_sum)
+
+sorted_idx = np.argsort(delta_theta)
+delta_theta_sorted = delta_theta[sorted_idx]
+error_theta_sorted = error_theta[sorted_idx]
+delta_color_sorted = delta_color[sorted_idx]
+
+# Parameters
+window_width = np.pi / 5   # e.g. window size ~18°
+step_size = np.pi / 400     # e.g. step ~1.8°
+x_vals = np.arange(-np.pi, np.pi, step_size)
+
+# Compute sliding circular mean
+circ_mean_vals_same = []
+circ_mean_vals_diff = []
+
+for x in x_vals:
+    # Create sliding window
+    lower = x - window_width / 2
+    upper = x + window_width / 2
+
+    # Handle circular wraparound (use modular arithmetic)
+    if lower < -np.pi:
+        mask = (delta_theta_sorted >= (lower + 2 * np.pi)) | (delta_theta_sorted < upper)
+    elif upper > np.pi:
+        mask = (delta_theta_sorted >= lower) | (delta_theta_sorted < (upper - 2 * np.pi))
+    else:
+        mask = (delta_theta_sorted >= lower) & (delta_theta_sorted < upper)
+
+    values_same = error_theta_sorted[mask & (color_near_far[sorted_idx] == 1)]
+    values_diff = error_theta_sorted[mask & (color_near_far[sorted_idx] == 0)]
+    if len(values_same) == 0:
+        circ_mean_vals_same.append(np.nan)
+    else:
+        circ_mean = circular_mean_window(values_same)
+        circ_mean_vals_same.append(circ_mean)
+
+    if len(values_diff) == 0:
+        circ_mean_vals_diff.append(np.nan)
+    else:
+        circ_mean = circular_mean_window(values_diff)
+        circ_mean_vals_diff.append(circ_mean)
+
+circ_mean_vals_same = np.array(circ_mean_vals_same)
+circ_mean_vals_diff = np.array(circ_mean_vals_diff)
+# %%
+plt.figure(figsize=(6, 4))
+
+# Scatter points
+#plt.scatter(delta_theta, error_theta, alpha=0.3, label='Raw data')
+
+# Circular mean per bin
+plt.plot(x_vals, circ_mean_vals_same, color='blue', linestyle='--', label='y_hat same color (sliding window)')
+plt.plot(x_vals, circ_mean_vals_diff, color='red', linestyle='--', label='y_hat opposite color (sliding window)')
+plt.scatter(delta_theta_sorted, error_theta_sorted, alpha=0.3)
+#add a legend, NOT a zero line
+plt.xlabel('distance θ₂ - θ₁ (rad)')
+plt.ylabel('Signed error θ (rad)')
+plt.title('Sliding Circular Mean of Response Bias')
+plt.legend()
+# %%
