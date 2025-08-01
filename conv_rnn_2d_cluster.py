@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 from section_chris.ReluRNNLayer import MyRNN
 from section_6.utils import generate_blank_sensory_input, errors_spatial
 from skimage.color import lab2rgb
+import warnings
+from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -19,7 +21,7 @@ model = convnext_base(weights=ConvNeXt_Base_Weights.DEFAULT)
 model.eval()
 weights = ConvNeXt_Base_Weights.DEFAULT
 preprocess = weights.transforms()
-model.features = model.features[0:3]  # Use only the first two layers for feature extraction
+model.features = model.features[0:2]  # Use only the first two layers for feature extraction
 model.to(device)
 
 # %%
@@ -48,7 +50,7 @@ def gabor(size, sigma, theta, Lambda, psi, gamma):
     # Bounding box
     s = torch.linspace(-1, 1, size)
 
-    (x, y) = torch.meshgrid(s, s)
+    (x, y) = torch.meshgrid(s, s, indexing='ij')
 
     # Rotation
     x_theta = x * torch.cos(theta) + y * torch.sin(theta)
@@ -111,23 +113,28 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
     target_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_1])
     target_gabors += 1
     target_gabors /= 2
-    target_gabors *= 75
+    target_gabors *= 74
     distractor_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_2])
     distractor_gabors += 1
     distractor_gabors /= 2
-    distractor_gabors *= 75
+    distractor_gabors *= 74
     # Convert to (C, H, W) format
     target_gabors = target_gabors.unsqueeze(1)  # Add channel dimension
     target_gabors = target_gabors.repeat(1, 3, 1, 1)  # Increase color dimensions to 3
-    target_gabors[:,1,1,1] = torch.cos(colors_1) * 100
-    target_gabors[:,2,1,1] = torch.sin(colors_1) * 100
-    target_gabors = lab2rgb(target_gabors.numpy(), channel_axis = 1)
+    target_gabors[:,1,:,:] = torch.cos(colors_1).unsqueeze(-1).unsqueeze(-1) * 37
+    target_gabors[:,2,:,:] = torch.sin(colors_1).unsqueeze(-1).unsqueeze(-1) * 37
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        # Convert LAB to RGB
+        target_gabors = lab2rgb(target_gabors.numpy(), channel_axis = 1)
     target_gabors = preprocess(torch.from_numpy(target_gabors))
     distractor_gabors = distractor_gabors.unsqueeze(1)  
     distractor_gabors = distractor_gabors.repeat(1, 3, 1, 1)
-    distractor_gabors[:,1,1,1] = torch.cos(colors_2) * 100
-    distractor_gabors[:,2,1,1] = torch.sin(colors_2) * 100
-    distractor_gabors = lab2rgb(distractor_gabors.numpy(), channel_axis = 1)
+    distractor_gabors[:,1,:,:] = torch.cos(colors_2).unsqueeze(-1).unsqueeze(-1) * 37
+    distractor_gabors[:,2,:,:] = torch.sin(colors_2).unsqueeze(-1).unsqueeze(-1) * 37
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        distractor_gabors = lab2rgb(distractor_gabors.numpy(), channel_axis = 1)
     distractor_gabors = preprocess(torch.from_numpy(distractor_gabors))
 
     with torch.no_grad():
@@ -140,25 +147,27 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
         target_features = torch.flatten(target_features, 1)
         distractor_features = torch.flatten(distractor_features, 1)
 
-    return target_features, distractor_features, target_colors, colors_1, colors_2
+    return target_features, distractor_features, target_angles, angles_1, angles_2, target_colors, colors_1, colors_2   
 
 
 ## Define our system
 dt = 0.01
 tau = 0.25  # time constant for the RNN dynamics
-n_a = 256 # input size
+n_a = 128 # input size
 N = 400 
-batch_size = 100
-rnn = MyRNN(n_a, N, 2, dt, tau)
+batch_size = 50
+rnn = MyRNN(n_a, N, 4, dt, tau)
 rnn.to(device)
 
 ## Define training machinery
-lr = 5e-4  # Reduced learning rate for larger network
+lr = 0.001 
 opt = torch.optim.Adam(rnn.parameters(), lr)
-num_batches = 5000
+num_batches = 3000
 losses = [] # Store for loss curve plotting
-dim1_errs = [] # Store for accuracies curve plotting
-dim2_errs = []
+dim1_errs_angles = [] # Store for accuracies curve plotting
+dim2_errs_angles = []
+dim1_errs_colors = []
+dim2_errs_colors = []
 
 ## Define simulation parameters
 T_prestim = 0.1     # in seconds
@@ -255,15 +264,16 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
 network_losses = []  # Store for network loss
 optimal_losses = []  # Store for optimal loss
 
-for b in range(num_batches):
+for b in tqdm(range(num_batches)):
 
     opt.zero_grad()
 
     #flip first and second here to change whether the network should focus on the first or second period (the first argument==the target period)
-    second_input, first_input, target_angles, second_angles, first_angles = generate_batch(batch_size, p, kappa_tilde, q)
+    second_input, first_input, target_angles, second_angles, first_angles, target_colors, second_colors, first_colors = generate_batch(batch_size, p, kappa_tilde, q)
     first_input = first_input.to(device)
     second_input = second_input.to(device)
     target_angles = target_angles.to(device)
+    target_colors = target_colors.to(device)
 
     rnn.init_hidden(batch_size)
 
@@ -307,50 +317,67 @@ for b in range(num_batches):
         batch_network_outputs.append(network_output)
 
     all_network_outputs = torch.stack(batch_network_outputs, 1)
-    loss = my_loss(all_network_outputs, target_angles)
-    
+    angle_loss = my_loss(all_network_outputs[:,:,:2], target_angles)
+    color_loss = my_loss(all_network_outputs[:,:,2:], target_colors)
+    loss = angle_loss + color_loss
+
     # Compute ideal observer loss for comparison
-    ideal_estimates = compute_ideal_observer_estimates(second_angles.to("cpu"), first_angles.to("cpu"), kappa_tilde, p)
+    ideal_angle_estimates = compute_ideal_observer_estimates(second_angles.to("cpu"), first_angles.to("cpu"), kappa_tilde, p)
+    ideal_color_estimates = compute_ideal_observer_estimates(second_colors.to("cpu"), first_colors.to("cpu"), kappa_tilde, p)
     # Convert ideal estimates to 2D output format for loss computation
-    ideal_angles = ideal_estimates
-    ideal_x = torch.cos(ideal_angles).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
-    ideal_y = torch.sin(ideal_angles).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
-    ideal_outputs = torch.cat([ideal_x, ideal_y], dim=2)
-    ideal_loss = my_loss(ideal_outputs, target_angles.to("cpu"))
-    
+    ideal_angle_x = torch.cos(ideal_angle_estimates).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
+    ideal_angle_y = torch.sin(ideal_angle_estimates).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
+    ideal_angle_outputs = torch.cat([ideal_angle_x, ideal_angle_y], dim=2)
+    ideal_angle_loss = my_loss(ideal_angle_outputs, target_angles.to("cpu"))
+
+    ideal_color_x = torch.cos(ideal_color_estimates).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
+    ideal_color_y = torch.sin(ideal_color_estimates).unsqueeze(1).repeat(1, resp_timesteps).unsqueeze(2)
+    ideal_color_outputs = torch.cat([ideal_color_x, ideal_color_y], dim=2)
+    ideal_color_loss = my_loss(ideal_color_outputs, target_colors.to("cpu"))
+
+    ideal_loss = ideal_angle_loss + ideal_color_loss
+
     loss.backward()
     opt.step()
 
-    x_err, y_err = errors_spatial(target_angles.to("cpu"), all_network_outputs.detach().to("cpu"), 2 * torch.pi)
+    x_err_angles, y_err_angles = errors_spatial(target_angles.to("cpu"), all_network_outputs[:,:,:2].detach().to("cpu"), 2 * torch.pi)
+    x_err_colors, y_err_colors = errors_spatial(target_colors.to("cpu"), all_network_outputs[:,:,2:].detach().to("cpu"), 2 * torch.pi)
 
     losses.append(loss.item())
     network_losses.append(loss.item())
     optimal_losses.append(ideal_loss.item())
-    dim1_errs.append(x_err.item())
-    dim2_errs.append(y_err.item())
+    dim1_errs_angles.append(x_err_angles.item())
+    dim2_errs_angles.append(y_err_angles.item())
+    dim1_errs_colors.append(x_err_colors.item())
+    dim2_errs_colors.append(y_err_colors.item())
 
     if b % 200 == 0:
         plt.close('all')
-        fig, axes = plt.subplots(4, figsize=(10, 12))
+        fig, axes = plt.subplots(6, figsize=(10, 12))
 
         axes[0].plot(losses[50:], label='Network Loss')
         if len(optimal_losses) > 50:
             axes[0].plot(optimal_losses[50:], label='Ideal Observer Loss')
         axes[0].legend()
         axes[0].set_title('Loss Comparison')
-        
-        axes[1].plot(dim1_errs[50:])
-        axes[1].set_title('Angle Errors')
-        
-        axes[2].plot(dim2_errs[50:])
+
+        axes[1].plot(dim1_errs_angles[50:])
+        axes[1].set_title('Orientation Angle Errors')
+
+        axes[2].plot(dim2_errs_angles[50:])
         axes[2].set_title('Magnitude Errors')
+
+        axes[3].plot(dim1_errs_colors[50:])
+        axes[3].set_title('Color Angle Errors')
+        axes[4].plot(dim2_errs_colors[50:])
+        axes[4].set_title('Color Magnitude Errors')
         
         # Plot loss gap
         if len(optimal_losses) > 50:
             loss_gap = np.array(network_losses[50:]) - np.array(optimal_losses[50:])
-            axes[3].plot(loss_gap)
-            axes[3].set_title('Performance Gap (Network - Ideal)')
-            axes[3].set_ylabel('Loss Difference')
+            axes[5].plot(loss_gap)
+            axes[5].set_title('Performance Gap (Network - Ideal)')
+            axes[5].set_ylabel('Loss Difference')
 
         print(f"Batch {b}: Network Loss: {losses[-1]:.4f}, Ideal Loss: {optimal_losses[-1]:.4f}")
         fig.savefig('grid_losses.png')

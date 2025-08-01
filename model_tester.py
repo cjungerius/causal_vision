@@ -22,7 +22,7 @@ model = convnext_base(weights=ConvNeXt_Base_Weights.DEFAULT)
 model.eval()
 weights = ConvNeXt_Base_Weights.DEFAULT
 preprocess = weights.transforms()
-model.features = model.features[0:3]  # Use only the first two layers for feature extraction
+model.features = model.features[0:2]  # Use only the first two layers for feature extraction
 model.to(device)
 
 # %%
@@ -114,22 +114,22 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
     target_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_1])
     target_gabors += 1
     target_gabors /= 2
-    target_gabors *= 75
+    target_gabors *= 74
     distractor_gabors = torch.stack([gabor(232, sigma=.4, theta=angle/2, Lambda=.25, psi=0, gamma=1) for angle in angles_2])
     distractor_gabors += 1
     distractor_gabors /= 2
-    distractor_gabors *= 75
+    distractor_gabors *= 74
     # Convert to (C, H, W) format
     target_gabors = target_gabors.unsqueeze(1)  # Add channel dimension
     target_gabors = target_gabors.repeat(1, 3, 1, 1)  # Increase color dimensions to 3
-    target_gabors[:,1,1,1] = torch.cos(colors_1) * 100
-    target_gabors[:,2,1,1] = torch.sin(colors_1) * 100
+    target_gabors[:,1,:,:] = torch.cos(colors_1).unsqueeze(-1).unsqueeze(-1) * 37
+    target_gabors[:,2,:,:] = torch.sin(colors_1).unsqueeze(-1).unsqueeze(-1) * 37
     target_gabors = lab2rgb(target_gabors.numpy(), channel_axis = 1)
     target_gabors = preprocess(torch.from_numpy(target_gabors))
     distractor_gabors = distractor_gabors.unsqueeze(1)  
     distractor_gabors = distractor_gabors.repeat(1, 3, 1, 1)
-    distractor_gabors[:,1,1,1] = torch.cos(colors_2) * 100
-    distractor_gabors[:,2,1,1] = torch.sin(colors_2) * 100
+    distractor_gabors[:,1,:,:] = torch.cos(colors_2).unsqueeze(-1).unsqueeze(-1) * 37
+    distractor_gabors[:,2,:,:] = torch.sin(colors_2).unsqueeze(-1).unsqueeze(-1) * 37
     distractor_gabors = lab2rgb(distractor_gabors.numpy(), channel_axis = 1)
     distractor_gabors = preprocess(torch.from_numpy(distractor_gabors))
 
@@ -150,7 +150,7 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
 ## Define our system
 dt = 0.01
 tau = 0.25  # time constant for the RNN dynamics
-n_a = 256 # input size
+n_a = 128 # input size
 N = 400 
 batch_size = 100
 rnn = MyRNN(n_a, N, 2, dt, tau)
@@ -255,14 +255,14 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
 # generate test batch
 
 model.eval()
-batch_size = 500
+batch_size = 1000
 
 eps1 = 0.9
 eps2 = (1 - eps1**2) ** 0.5
 C = .01
 
 ## Initialise simulation, including the first noise term
-eta_tilde = torch.randn(batch_size, N)
+eta_tilde = torch.randn(batch_size*2, N)
 eta_tilde = eta_tilde.to(device)
 
 
@@ -381,7 +381,7 @@ plt.ylabel('Signed error θ (rad)')
 plt.title('Response Bias Relative to Distractor Stimulus')
 plt.grid(True)
 plt.tight_layout()
-plt.show()
+plt.savefig("model_analysis_figs/response_bias_relative_to_distractor_stimulus.png")
 # %%
 
 df = pd.DataFrame({"delta_theta": delta_theta, "error_theta": error_theta, "dist": color_near_far})
@@ -394,7 +394,7 @@ plt.title('Response Bias Relative to Distractor Stimulus')
 plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.show()
+plt.savefig("model_analysis_figs/response_bias_relative_to_distractor_stimulus_regression.png")
 
 # %%
 
@@ -461,4 +461,5 @@ plt.xlabel('distance θ₂ - θ₁ (rad)')
 plt.ylabel('Signed error θ (rad)')
 plt.title('Sliding Circular Mean of Response Bias')
 plt.legend()
+plt.savefig("model_analysis_figs/sliding_circular_mean_response_bias.png")
 # %%
