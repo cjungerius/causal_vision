@@ -11,6 +11,7 @@ import warnings
 from skimage.color import lab2rgb
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import pickle
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -120,8 +121,8 @@ my_model.to(device)
 # %%
 # Train the model for a few epochs
 optimizer = torch.optim.Adam(my_model.parameters(), lr=0.001)
-batch_size = 10
-num_batches = 300  
+batch_size = 50
+num_batches = 400  
 model_losses = []
 
 def my_loss(output, target):
@@ -173,8 +174,8 @@ print(f"Model Loss: {model_losses[-1]:.4f}")
 
 
 # %%
-X_train, y_train = generate_batch(250)
-X_test, y_test = generate_batch(50)
+X_train, y_train = generate_batch(2000)
+X_test, y_test = generate_batch(100)
 
 # %%
 y_train_multi = np.array([np.cos(y_train.cpu()), np.sin(y_train.cpu())]).T
@@ -187,9 +188,6 @@ prediction = regressor.predict(X_test.cpu())
 
 angle_predicted = np.arctan2(prediction[:, 1], prediction[:, 0]) % (2*np.pi) # type: ignore
 
-f, ax = plt.subplots(figsize=(4, 3))
-ax.scatter(y_test, angle_predicted, lw=0)
-ax.set(ylabel="Predicted $y$", xlabel="Test $y$")
 # %%
 # comparing SVM and NN approach:
 
@@ -197,7 +195,14 @@ y_hat_svm = angle_predicted
 model_output = my_model(X_test).detach().cpu()
 y_hat_nn = torch.arctan2(model_output[:,1], model_output[:,0]) % (2 * torch.pi)
 f, ax = plt.subplots(figsize=(4, 3))
-#ax.scatter(y_test, y_hat_svm, alpha=.3)
-ax.scatter(y_test, y_test-y_hat_nn, alpha=.3, c="orange")
+ax.scatter(y_test, y_hat_svm, alpha=.3)
+ax.scatter(y_test, y_hat_nn, alpha=.3, c="orange")
+ax.set(ylabel="Predicted $y$", xlabel="Test $y$")
+plt.savefig("svm_nn_comparison.png")
 
 # %%
+# save SVM and NN decoders
+torch.save(my_model.state_dict(), "vector_angle_decoder_nn.pth")
+
+with open('vector_angle_decoder_svm.pkl','wb') as f:
+    pickle.dump(regressor,f)

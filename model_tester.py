@@ -11,6 +11,7 @@ from section_6.utils import generate_blank_sensory_input
 from skimage.color import lab2rgb
 import pandas as pd
 import seaborn as sns
+import warnings
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -124,13 +125,17 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
     target_gabors = target_gabors.repeat(1, 3, 1, 1)  # Increase color dimensions to 3
     target_gabors[:,1,:,:] = torch.cos(colors_1).unsqueeze(-1).unsqueeze(-1) * 37
     target_gabors[:,2,:,:] = torch.sin(colors_1).unsqueeze(-1).unsqueeze(-1) * 37
-    target_gabors = lab2rgb(target_gabors.numpy(), channel_axis = 1)
+    with  warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        target_gabors = lab2rgb(target_gabors.numpy(), channel_axis = 1)
     target_gabors = preprocess(torch.from_numpy(target_gabors))
     distractor_gabors = distractor_gabors.unsqueeze(1)  
     distractor_gabors = distractor_gabors.repeat(1, 3, 1, 1)
     distractor_gabors[:,1,:,:] = torch.cos(colors_2).unsqueeze(-1).unsqueeze(-1) * 37
     distractor_gabors[:,2,:,:] = torch.sin(colors_2).unsqueeze(-1).unsqueeze(-1) * 37
-    distractor_gabors = lab2rgb(distractor_gabors.numpy(), channel_axis = 1)
+    with  warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        distractor_gabors = lab2rgb(distractor_gabors.numpy(), channel_axis = 1)
     distractor_gabors = preprocess(torch.from_numpy(distractor_gabors))
 
     with torch.no_grad():
@@ -153,7 +158,7 @@ tau = 0.25  # time constant for the RNN dynamics
 n_a = 128 # input size
 N = 400 
 batch_size = 100
-rnn = MyRNN(n_a, N, 2, dt, tau)
+rnn = MyRNN(n_a, N, 4, dt, tau)
 rnn.to(device)
 rnn.init_hidden(batch_size)
 
@@ -255,7 +260,7 @@ def compute_ideal_observer_estimates(first_inputs, second_inputs, kappa_tilde, p
 # generate test batch
 
 model.eval()
-batch_size = 1000
+batch_size = 2000
 
 eps1 = 0.9
 eps2 = (1 - eps1**2) ** 0.5
@@ -267,12 +272,12 @@ eta_tilde = eta_tilde.to(device)
 
 
 #flip first and second here to change whether the network should focus on the first or second period (the first argument==the target period)
-second_input, first_input, target_angles, second_angles, first_angles, second_colors, first_colors = generate_batch(batch_size, -1, kappa_tilde, -1)
+second_input, first_input, target_angles, second_angles, first_angles, second_colors, first_colors = generate_batch(batch_size, -1, kappa_tilde, 0)
 first_input = first_input.to(device)
 second_input = second_input.to(device)
 target_angles = target_angles.to(device)
 #concatenate with a batch where q == 1, so that the distractor colors are the same as the target colors
-second_input_2, first_input_2, target_angles_2, second_angles_2, first_angles_2, second_colors_2, first_colors_2 = generate_batch(batch_size, -1, kappa_tilde, 1)
+second_input_2, first_input_2, target_angles_2, second_angles_2, first_angles_2, second_colors_2, first_colors_2 = generate_batch(batch_size, -1, kappa_tilde, 0)
 first_input_2 = first_input_2.to(device)
 second_input_2 = second_input_2.to(device)
 target_angles_2 = target_angles_2.to(device)
@@ -349,9 +354,9 @@ color = second_colors
 color_2 = first_colors
 
 
-fig, ax = plt.subplots(2)
-ax[0].scatter(theta,theta_hat)
-ax[1].scatter(theta_2,theta_hat)
+# fig, ax = plt.subplots(2)
+# ax[0].scatter(theta,theta_hat)
+# ax[1].scatter(theta_2,theta_hat)
 
 # %%
 def circular_distance(b1, b2):
@@ -364,102 +369,116 @@ delta_theta = circular_distance(theta_2, theta)        # Direction θ₂ - θ₁
 error_theta = circular_distance(theta_hat, theta)      # Direction θ̂ - θ₁
 delta_color = circular_distance(color_2, color)            # Direction color₂ - color₁
 
-#error_theta = torch.where(delta_theta < 0, -1*error_theta, error_theta)
-#delta_theta = torch.where(delta_theta < 0, -1*delta_theta, delta_theta)
+error_theta = torch.where(delta_theta < 0, -1*error_theta, error_theta)
+delta_theta = torch.abs(delta_theta)
+delta_color = torch.abs(delta_color)
+plt.scatter(delta_theta, delta_color, c=error_theta)
+plt.colorbar()
+plt.savefig("heatmap_thing.png")
 
-delta_color = torch.where(delta_color < 0, -1*delta_color, delta_color)
-color_near_far = torch.where(delta_color < torch.pi/2, 1, 0)  # 1 if near, 0 if far
+x = delta_color
+y = delta_theta
+z = error_theta
 
-plt.figure(figsize=(6, 4))
-plt.scatter(delta_theta.numpy(), error_theta.numpy(), alpha=0.7, c=color_near_far)
-plt.xlim(-torch.pi, torch.pi)
-plt.ylim(-0.3, 0.3)
+vals, xbins, ybins = np.histogram2d(delta_color, delta_theta, weights = error_theta, bins=(30, 30))
 
-plt.axhline(0, color='gray', linestyle='--')
-plt.xlabel('distance θ₂ - θ₁ (rad)')
-plt.ylabel('Signed error θ (rad)')
-plt.title('Response Bias Relative to Distractor Stimulus')
-plt.grid(True)
-plt.tight_layout()
-plt.savefig("model_analysis_figs/response_bias_relative_to_distractor_stimulus.png")
-# %%
+m1 = plt.pcolormesh(ybins, xbins, vals, cmap='viridis')
+plt.colorbar()
+plt.savefig("another_heatmap.png")
 
-df = pd.DataFrame({"delta_theta": delta_theta, "error_theta": error_theta, "dist": color_near_far})
-# regplot split by dist
-sns.regplot(x="delta_theta", y="error_theta", data=df[df["dist"] == 1], x_bins=np.arange(-torch.pi, torch.pi, torch.pi/10), scatter=True, fit_reg=False, label="Near")
-sns.regplot(x="delta_theta", y="error_theta", data=df[df["dist"] == 0], x_bins=np.arange(-torch.pi, torch.pi, torch.pi/10), scatter=True, fit_reg=False, label="Far")
-plt.xlabel('distance θ₂ - θ₁ (rad)')
-plt.ylabel('Signed error θ (rad)')
-plt.title('Response Bias Relative to Distractor Stimulus')
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-plt.savefig("model_analysis_figs/response_bias_relative_to_distractor_stimulus_regression.png")
+# delta_color = torch.where(delta_color < 0, -1*delta_color, delta_color)
+# color_near_far = torch.where(delta_color < torch.pi/2, 1, 0)  # 1 if near, 0 if far
 
-# %%
+# plt.figure(figsize=(6, 4))
+# plt.scatter(delta_theta.numpy(), error_theta.numpy(), alpha=0.7, c=color_near_far)
+# plt.xlim(-torch.pi, torch.pi)
+# plt.ylim(-0.3, 0.3)
 
-def circular_mean_window(angles: torch.Tensor) -> torch.Tensor:
-    sin_sum = torch.sin(angles).mean(dim=0)
-    cos_sum = torch.cos(angles).mean(dim=0)
-    return torch.atan2(sin_sum, cos_sum)
+# plt.axhline(0, color='gray', linestyle='--')
+# plt.xlabel('distance θ₂ - θ₁ (rad)')
+# plt.ylabel('Signed error θ (rad)')
+# plt.title('Response Bias Relative to Distractor Stimulus')
+# plt.grid(True)
+# plt.tight_layout()
+# plt.savefig("model_analysis_figs/response_bias_relative_to_distractor_stimulus.png")
+# # %%
 
-sorted_idx = np.argsort(delta_theta)
-delta_theta_sorted = delta_theta[sorted_idx]
-error_theta_sorted = error_theta[sorted_idx]
-delta_color_sorted = delta_color[sorted_idx]
+# df = pd.DataFrame({"delta_theta": delta_theta, "error_theta": error_theta, "dist": color_near_far})
+# # regplot split by dist
+# sns.regplot(x="delta_theta", y="error_theta", data=df[df["dist"] == 1], x_bins=np.arange(-torch.pi, torch.pi, torch.pi/10), scatter=True, fit_reg=False, label="Near")
+# sns.regplot(x="delta_theta", y="error_theta", data=df[df["dist"] == 0], x_bins=np.arange(-torch.pi, torch.pi, torch.pi/10), scatter=True, fit_reg=False, label="Far")
+# plt.xlabel('distance θ₂ - θ₁ (rad)')
+# plt.ylabel('Signed error θ (rad)')
+# plt.title('Response Bias Relative to Distractor Stimulus')
+# plt.legend()
+# plt.grid(True)
+# plt.tight_layout()
+# plt.savefig("model_analysis_figs/response_bias_relative_to_distractor_stimulus_regression.png")
 
-# Parameters
-window_width = np.pi / 5   # e.g. window size ~18°
-step_size = np.pi / 400     # e.g. step ~1.8°
-x_vals = np.arange(-np.pi, np.pi, step_size)
+# # %%
 
-# Compute sliding circular mean
-circ_mean_vals_same = []
-circ_mean_vals_diff = []
+# def circular_mean_window(angles: torch.Tensor) -> torch.Tensor:
+#     sin_sum = torch.sin(angles).mean(dim=0)
+#     cos_sum = torch.cos(angles).mean(dim=0)
+#     return torch.atan2(sin_sum, cos_sum)
 
-for x in x_vals:
-    # Create sliding window
-    lower = x - window_width / 2
-    upper = x + window_width / 2
+# sorted_idx = np.argsort(delta_theta)
+# delta_theta_sorted = delta_theta[sorted_idx]
+# error_theta_sorted = error_theta[sorted_idx]
+# delta_color_sorted = delta_color[sorted_idx]
 
-    # Handle circular wraparound (use modular arithmetic)
-    if lower < -np.pi:
-        mask = (delta_theta_sorted >= (lower + 2 * np.pi)) | (delta_theta_sorted < upper)
-    elif upper > np.pi:
-        mask = (delta_theta_sorted >= lower) | (delta_theta_sorted < (upper - 2 * np.pi))
-    else:
-        mask = (delta_theta_sorted >= lower) & (delta_theta_sorted < upper)
+# # Parameters
+# window_width = np.pi / 5   # e.g. window size ~18°
+# step_size = np.pi / 400     # e.g. step ~1.8°
+# x_vals = np.arange(-np.pi, np.pi, step_size)
 
-    values_same = error_theta_sorted[mask & (color_near_far[sorted_idx] == 1)]
-    values_diff = error_theta_sorted[mask & (color_near_far[sorted_idx] == 0)]
-    if len(values_same) == 0:
-        circ_mean_vals_same.append(np.nan)
-    else:
-        circ_mean = circular_mean_window(values_same)
-        circ_mean_vals_same.append(circ_mean)
+# # Compute sliding circular mean
+# circ_mean_vals_same = []
+# circ_mean_vals_diff = []
 
-    if len(values_diff) == 0:
-        circ_mean_vals_diff.append(np.nan)
-    else:
-        circ_mean = circular_mean_window(values_diff)
-        circ_mean_vals_diff.append(circ_mean)
+# for x in x_vals:
+#     # Create sliding window
+#     lower = x - window_width / 2
+#     upper = x + window_width / 2
 
-circ_mean_vals_same = np.array(circ_mean_vals_same)
-circ_mean_vals_diff = np.array(circ_mean_vals_diff)
-# %%
-plt.figure(figsize=(6, 4))
+#     # Handle circular wraparound (use modular arithmetic)
+#     if lower < -np.pi:
+#         mask = (delta_theta_sorted >= (lower + 2 * np.pi)) | (delta_theta_sorted < upper)
+#     elif upper > np.pi:
+#         mask = (delta_theta_sorted >= lower) | (delta_theta_sorted < (upper - 2 * np.pi))
+#     else:
+#         mask = (delta_theta_sorted >= lower) & (delta_theta_sorted < upper)
 
-# Scatter points
-#plt.scatter(delta_theta, error_theta, alpha=0.3, label='Raw data')
+#     values_same = error_theta_sorted[mask & (color_near_far[sorted_idx] == 1)]
+#     values_diff = error_theta_sorted[mask & (color_near_far[sorted_idx] == 0)]
+#     if len(values_same) == 0:
+#         circ_mean_vals_same.append(np.nan)
+#     else:
+#         circ_mean = circular_mean_window(values_same)
+#         circ_mean_vals_same.append(circ_mean)
 
-# Circular mean per bin
-plt.plot(x_vals, circ_mean_vals_same, color='blue', linestyle='--', label='y_hat same color (sliding window)')
-plt.plot(x_vals, circ_mean_vals_diff, color='red', linestyle='--', label='y_hat opposite color (sliding window)')
-plt.scatter(delta_theta_sorted, error_theta_sorted, alpha=0.3)
-#add a legend, NOT a zero line
-plt.xlabel('distance θ₂ - θ₁ (rad)')
-plt.ylabel('Signed error θ (rad)')
-plt.title('Sliding Circular Mean of Response Bias')
-plt.legend()
-plt.savefig("model_analysis_figs/sliding_circular_mean_response_bias.png")
-# %%
+#     if len(values_diff) == 0:
+#         circ_mean_vals_diff.append(np.nan)
+#     else:
+#         circ_mean = circular_mean_window(values_diff)
+#         circ_mean_vals_diff.append(circ_mean)
+
+# circ_mean_vals_same = np.array(circ_mean_vals_same)
+# circ_mean_vals_diff = np.array(circ_mean_vals_diff)
+# # %%
+# plt.figure(figsize=(6, 4))
+
+# # Scatter points
+# #plt.scatter(delta_theta, error_theta, alpha=0.3, label='Raw data')
+
+# # Circular mean per bin
+# plt.plot(x_vals, circ_mean_vals_same, color='blue', linestyle='--', label='y_hat same color (sliding window)')
+# plt.plot(x_vals, circ_mean_vals_diff, color='red', linestyle='--', label='y_hat opposite color (sliding window)')
+# plt.scatter(delta_theta_sorted, error_theta_sorted, alpha=0.3)
+# #add a legend, NOT a zero line
+# plt.xlabel('distance θ₂ - θ₁ (rad)')
+# plt.ylabel('Signed error θ (rad)')
+# plt.title('Sliding Circular Mean of Response Bias')
+# plt.legend()
+# plt.savefig("model_analysis_figs/sliding_circular_mean_response_bias.png")
+# # %%

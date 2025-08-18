@@ -3,7 +3,6 @@
 import numpy as np
 import torch
 from torch import randn
-from torch.nn import MSELoss
 from torch.distributions import VonMises
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
 import matplotlib.pyplot as plt
@@ -11,7 +10,6 @@ from section_chris.ReluRNNLayer import MyRNN
 from section_6.utils import generate_blank_sensory_input
 from skimage.color import lab2rgb
 import warnings
-from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -119,8 +117,8 @@ def generate_batch(batch_size, p=0.5, kappa=5.0, q=0.0):
         gabors = gabors.repeat(1, 3, 1, 1)  # Expand to 3 channels
         
         # Encode colors in LAB space (L=74, a=cos*37, b=sin*37)
-        gabors[:,1,:,:] = torch.cos(colors).unsqueeze(-1).unsqueeze(-1) * 37
-        gabors[:,2,:,:] = torch.sin(colors).unsqueeze(-1).unsqueeze(-1) * 37
+        gabors[:,1,:,:] = 0#torch.cos(colors).unsqueeze(-1).unsqueeze(-1) * 37
+        gabors[:,2,:,:] = 0#torch.sin(colors).unsqueeze(-1).unsqueeze(-1) * 37
         
         # Convert LAB to RGB with warning suppression
         with warnings.catch_warnings():
@@ -148,14 +146,14 @@ dt = 0.01
 tau = 0.25  # time constant for the RNN dynamics
 n_a = 128 # input size
 N = 600 
-batch_size = 20
+batch_size = 100
 rnn = MyRNN(n_a, N, n_a, dt, tau)
 rnn.to(device)
 
 ## Define training machinery
 lr = 0.001 
 opt = torch.optim.Adam(rnn.parameters(), lr)
-num_batches = 2000
+num_batches = 3000
 losses = [] # Store for loss curve plotting
 
 ## Define simulation parameters
@@ -175,7 +173,7 @@ kappa_tilde = 7 # von Mises concentration parameter for the sensory input
 # noise generating von mises distribution
 noise_dist = VonMises(0, kappa_tilde)
 p = 2/5
-q = 3/5
+q = 0 #3/5
 eps1 = 0.9
 eps2 = (1 - eps1**2) ** 0.5
 C = .01
@@ -189,7 +187,7 @@ network_losses = []  # Store for network loss
 
 # %% train!
 
-for b in tqdm(range(num_batches)):
+for b in range(num_batches):
 
     opt.zero_grad()
 
@@ -260,7 +258,7 @@ for b in tqdm(range(num_batches)):
         plt.savefig('vector_losses.png')
 
 
-torch.save(rnn.state_dict(), 'cnn_rnn_vector_model_local.pth')
+torch.save(rnn.state_dict(), 'cnn_rnn_vector_model.pth')
 
 
 # %%
