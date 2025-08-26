@@ -1,155 +1,222 @@
+# %%
 from abc import ABC, abstractmethod
 import torch
 from torch import pi
-import warnings
-from skimage.color import lab2rgb
 from torch.distributions import VonMises
-
-
-class Task(ABC):
-    def __init__(self, p, q, kappa_1, kappa_2, n_a):
+import numpy as np
+from utils import generate_gabor_features
+from torchvision.models import convnext_base, ConvNeXt_Base_Weights
+# %%
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# %%
+# Load the ConvNeXt model with pretrained weights
+model = convnext_base(weights=ConvNeXt_Base_Weights.DEFAULT)
+# Set the model to evaluation mode
+model.eval()
+weights = ConvNeXt_Base_Weights.DEFAULT
+preprocess = weights.transforms()
+model.features = model.features[0:2]  # Use only the first two layers for feature extraction
+for param in model.parameters():
+    param.requires_grad = False
+model.to(device)
+# %%
+class DataGenerator(ABC):
+    def __init__(self, p: float, q: float, kappa_1: float, kappa_2: float):
         self.p = p
         self.q = q
         self.kappa_1 = kappa_1
         self.kappa_2 = kappa_2
-        self.n_a = n_a
         self.vm_1 = VonMises(0, self.kappa_1)
         self.vm_2 = VonMises(0, self.kappa_2)
 
-    def generate_angles(self, batch_size):
+    def _generate_angles(self, batch_size):
         return torch.rand(batch_size) * 2 * pi
 
     @abstractmethod
     def generate_batch(self, batch_size: int) -> dict:
         pass
 
-    @abstractmethod
-    def generate_inputs(self, batch) -> tuple:
-        pass
-
-
-class AngleTask1D(Task):
-    def __init__(self, p, kappa, n_a):
-        super().__init__(p, 0, kappa, 1, n_a)
+class DataGenerator1D(DataGenerator):
+    def __init__(self, p, kappa):
+        super().__init__(p, 0, kappa, 1)
 
     def generate_batch(self, batch_size: int):
-        targets = self.generate_angles(batch_size)
-        distractors = self.generate_angles(batch_size)
+        targets = self._generate_angles(batch_size)
+        distractors = self._generate_angles(batch_size)
         distractors = torch.where(torch.rand(batch_size) < self.p, targets, distractors)
-
-        targets_observed = targets + self.vm_1.sample((batch_size,)) % (2 * pi)
-        distractors_observed = distractors + self.vm_1.sample((batch_size,)) % (2 * pi)
+        
+        targets_observed = (targets + self.vm_1.sample((batch_size,))) % (2 * pi)
+        distractors_observed = (distractors + self.vm_1.sample((batch_size,))) % (2 * pi)
 
         return {
-            "targets": targets,
-            "distractors": distractors,
-            "targets_observed": targets_observed,
-            "distractors_observed": distractors_observed,
+            "target_angles": targets,
+            "distractor_angles": distractors,
+            "target_angles_observed": targets_observed,
+            "distractor_angles_observed": distractors_observed,
         }
 
-    def generate_inputs(self, batch):
-        target_inputs = bump_input(batch["targets_observed"], self.n_a, 1, self.kappa_1)
-        distractor_inputs = bump_input(
-            batch["distractors_observed"], self.n_a, 1, self.kappa_1
-        )
+class DataGenerator2D(DataGenerator):
+    def __init__(self, p, q, kappa_1, kappa_2):
+        super().__init__(p, q, kappa_1, kappa_2)
+
+    def generate_batch(self, batch_size: int):
+        target_angles = self._generate_angles(batch_size)
+        target_colors = self._generate_angles(batch_size)
+        distractor_angles = self._generate_angles(batch_size)
+        distractor_colors = self._generate_angles(batch_size)
+
+        probability_vector = torch.tensor([
+            self.p * self.p + self.q * np.sqrt(self.p ** 2 * (1 - self.p) ** 2),
+            self.p * (1 - self.p) - self.q * np.sqrt(self.p ** 2 * (1 - self.p) ** 2),
+            (1 - self.p) * self.p - self.q * np.sqrt(self.p ** 2 * (1 - self.p) ** 2),
+            (1 - self.p) ** 2 + self.q * np.sqrt(self.p ** 2 * (1 - self.p) ** 2)
+        ])
+
+        class_vector = probability_vector.multinomial(batch_size, replacement=True)
+    
+        distractor_angles = torch.where(torch.logical_or(class_vector == 0, class_vector == 1) , target_angles, distractor_angles)
+        distractor_colors = torch.where(torch.logical_or(class_vector == 0, class_vector == 2), target_colors, distractor_colors)
+        
+        target_angles_observed = (target_angles + self.vm_1.sample((batch_size,))) % (2 * pi)
+        target_colors_observed = (target_colors + self.vm_2.sample((batch_size,))) % (2 * pi)
+        distractor_angles_observed = (distractor_angles + self.vm_1.sample((batch_size,))) % (2 * pi)
+        distractor_colors_observed = (distractor_colors + self.vm_2.sample((batch_size,))) % (2 * pi)
+
+        return {
+            "target_angles": target_angles,
+            "target_colors": target_colors,
+            "distractor_angles": distractor_angles,
+            "distractor_colors": distractor_colors,
+            "target_angles_observed": target_angles_observed,
+            "target_colors_observed": target_colors_observed,
+            "distractor_angles_observed": distractor_angles_observed,
+            "distractor_colors_observed": distractor_colors_observed,
+        }
+
+class StimuliGenerator(ABC):
+    def __init__(self):
+        return
+    
+    @abstractmethod
+    def generate_inputs(self, batch: dict, test: bool) -> tuple:
+        pass
+
+class SpatialStimuliGenerator1D(StimuliGenerator):
+    def __init__(self, n_a, tuning_concentration, A):
+        super().__init__()
+        self.n_a = n_a
+        self.tuning_concentration = tuning_concentration
+        self.A = A
+
+    def bump_input(self, angles):
+        batch_size = angles.shape[0]
+        device = angles.device
+        # preferred directions: 0, 2π/n, ..., 2π*(n-1)/n
+        unit_indices = torch.arange(self.n_a, device=device, dtype=angles.dtype)  # [0..n-1]
+        preferred = (2 * pi) * unit_indices / self.n_a  # [n]
+        angle_diffs = angles.unsqueeze(1) - preferred.unsqueeze(0)  # [B, n]
+        bumps = self.A * torch.exp(self.tuning_concentration * torch.cos(angle_diffs))
+        return bumps
+
+    def generate_inputs(self, batch, test=False):
+        if test:
+            target_inputs = self.bump_input(batch["target_angles"])
+            distractor_inputs = self.bump_input(batch["distractor_angles"])
+        else:
+            target_inputs = self.bump_input(batch["target_angles_observed"])
+            distractor_inputs = self.bump_input(
+                batch["distractor_angles_observed"])
         return (target_inputs, distractor_inputs)
 
 
-class AngleTask2D(Task):
-    def __init__(self, p, q, kappa_1, kappa_2, n_a):
-        super().__init__(p, q, kappa_1, kappa_2, n_a)
+class SpatialStimuliGenerator2D(StimuliGenerator):
+    def __init__(self, n_a, tuning_concentration, A):        
+        super().__init__()
+        self.n_a = n_a
+        self.tuning_concentration = tuning_concentration
+        self.A = A
+
+    def bump_input(self, angles, colors):
+        batch_size = angles.shape[0]
+        device = angles.device
+        idx = torch.arange(self.n_a, device=device, dtype=angles.dtype)  # [0..n-1]
+        pref = (2 * pi) * idx / self.n_a  # [n]
+
+        diffs_x = angles.unsqueeze(1) - pref.unsqueeze(0)  # [B, n]
+        diffs_y = colors.unsqueeze(1) - pref.unsqueeze(0)  # [B, n]
+
+        bumps_x = self.A * torch.exp(self.tuning_concentration * torch.cos(diffs_x))  # [B, n]
+        bumps_y = self.A * torch.exp(self.tuning_concentration * torch.cos(diffs_y))  # [B, n]
+
+        # Outer product per batch -> [B, n, n]
+        bumps = torch.einsum('bi,bj->bij', bumps_x, bumps_y)
+        norm = torch.exp(torch.tensor(self.tuning_concentration, device=device))
+        bumps = bumps / norm
+        return bumps.view(batch_size, -1)
+    
+    def generate_inputs(self, batch, test=False):
+        if test:
+            target_inputs = self.bump_input(batch["target_angles"], batch["target_colors"])
+            distractor_inputs = self.bump_input(batch["distractor_angles"], batch["distractor_colors"])
+        else:
+            target_inputs = self.bump_input(batch["target_angles_observed"], batch["target_colors_observed"])
+            distractor_inputs = self.bump_input(
+                batch["distractor_angles_observed"],
+                batch["distractor_colors_observed"]
+                )
+            
+        return (target_inputs, distractor_inputs)
+
+class FeatureStimuliGenerator1D(StimuliGenerator):
+    def __init__(self, model, device, preprocess):
+        super().__init__()
+        self.model = model
+        self.device = device
+        self.preprocess = preprocess
+    
+    def generate_inputs(self, batch, test=False):
+        colors = torch.zeros(batch["target_angles"].shape[0])
+
+        if test:
+            target_inputs = generate_gabor_features(batch["target_angles"], colors, self.model, self.device, self.preprocess)
+            distractor_inputs = generate_gabor_features(batch["distractor_angles"], colors, self.model, self.device, self.preprocess)
+        else:
+            target_inputs = generate_gabor_features(batch["target_angles_observed"], colors, self.model, self.device, self.preprocess)
+            distractor_inputs = generate_gabor_features(batch["distractor_angles_observed"], colors, self.model, self.device, self.preprocess)
+        return (target_inputs, distractor_inputs)
 
 
-class FeatureTask1D(AngleTask1D):
-    def __init__(self, p, kappa, n_a):
-        super().__init__(p, kappa, n_a)
+class FeatureStimuliGenerator2D(StimuliGenerator):
+    def __init__(self, model, device, preprocess):
+        super().__init__()
+        self.model = model
+        self.device = device
+        self.preprocess = preprocess
+    
+    def generate_inputs(self, batch, test=False):
 
+        if test:
+            target_inputs = generate_gabor_features(batch["target_angles"], batch["target_colors"], self.model, self.device, self.preprocess)
+            distractor_inputs = generate_gabor_features(batch["distractor_angles"], batch["distractor_colors"], self.model, self.device, self.preprocess)
+        else:
+            target_inputs = generate_gabor_features(batch["target_angles_observed"], batch["target_colors_observed"], self.model, self.device, self.preprocess)
+            distractor_inputs = generate_gabor_features(batch["distractor_angles_observed"], batch["distractor_colors_observed"], self.model, self.device, self.preprocess)
+        return (target_inputs, distractor_inputs)
+        
+# %%
+datgen1d = DataGenerator1D(0.5, 8)
+stimgen1d = SpatialStimuliGenerator1D(10, 3, 1)
+b = datgen1d.generate_batch(20)
+target_inputs, distractor_inputs = stimgen1d.generate_inputs(b)
+from matplotlib import pyplot as plt
+plt.plot(target_inputs[7,:])
 
-class FeatureTask2D(AngleTask2D):
-    def __init__(self, p, q, kappa_1, kappa_2, n_a):
-        super().__init__(p, q, kappa_1, kappa_2, n_a)
+# %%
+datgen2d = DataGenerator2D(0.5,0.5,8,8)
+stimgen2d = SpatialStimuliGenerator2D(10, 3, 1)
+b = datgen2d.generate_batch(20)
+target_inputs, distractor_inputs = stimgen2d.generate_inputs(b)
+# %%
+plt.plot(target_inputs[1,:])
 
-
-def generate_angles(batch_size):
-    return torch.rand(batch_size) * 2 * pi
-
-
-def bump_input(angles, n_a, A, kappa):
-    batch_size = angles.shape[0]
-    unit_indices = torch.arange(1, n_a + 1).unsqueeze(0).repeat(batch_size, 1)
-    angle_diffs = (angles.unsqueeze(1) - unit_indices) * 2 * pi / n_a
-    bumps = A * (kappa * angle_diffs.cos()).exp()
-    return bumps
-
-
-def make_gabors(
-    size: int,
-    sigma: float,
-    theta: torch.Tensor,
-    Lambda: float,
-    psi: float,
-    gamma: float,
-) -> torch.Tensor:
-    """Draw a gabor patch."""
-    sigma_x = sigma
-    sigma_y = sigma / gamma
-
-    # Bounding box
-    s = torch.linspace(-1, 1, size)
-
-    (x, y) = torch.meshgrid(s, s, indexing="xy")
-
-    theta = theta.view(*theta.shape, 1, 1)
-
-    # Rotation
-    x_theta = x * torch.cos(theta) + y * torch.sin(theta)
-    y_theta = -x * torch.sin(theta) + y * torch.cos(theta)
-
-    gb = torch.exp(
-        -0.5 * (x_theta**2 / sigma_x**2 + y_theta**2 / sigma_y**2)
-    ) * torch.cos(2 * torch.pi / Lambda * x_theta + psi)
-    return gb
-
-
-def generate_gabor_features(angles, colors, model, device, preprocess):
-    """
-    Generate Gabor patches with color encoding and extract features using a CNN model.
-
-    Args:
-        angles (torch.Tensor): Tensor of angles for Gabor orientation (in radians)
-        colors (torch.Tensor): Tensor of color angles (in radians)
-        model: CNN model for feature extraction
-        device: Target device (e.g., 'cuda')
-        preprocess: Image preprocessing function
-
-    Returns:
-        torch.Tensor: Extracted features (flattened)
-    """
-    # Generate Gabor patches
-    gabors = make_gabors(
-        size=232, sigma=0.4, theta=angles / 2, Lambda=0.25, psi=0, gamma=1
-    )
-    # Normalize to [0, 74] range
-    gabors = (gabors + 1) / 2 * 74
-
-    # Convert to (C, H, W) format and add color channels
-    gabors = gabors.unsqueeze(1)  # Add channel dimension
-    gabors = gabors.repeat(1, 3, 1, 1)  # Expand to 3 channels
-
-    # Encode colors in LAB space (L=74, a=cos*37, b=sin*37)
-    gabors[:, 1, :, :] = torch.cos(colors).view(*colors.shape, 1, 1) * 37
-    gabors[:, 2, :, :] = torch.sin(colors).view(*colors.shape, 1, 1) * 37
-
-    # Convert LAB to RGB with warning suppression
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=UserWarning)
-        gabors = lab2rgb(gabors.numpy(), channel_axis=1)
-
-    # Preprocess and extract features
-    gabors = preprocess(torch.from_numpy(gabors)).to(device)
-    with torch.no_grad():
-        features = model.features(gabors)
-        features = model.avgpool(features)
-        features = torch.flatten(features, 1)
-
-    return features
+# %%
