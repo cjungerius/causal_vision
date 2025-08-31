@@ -1,15 +1,35 @@
 import torch
 import warnings
 from skimage.color import lab2rgb
- 
-def make_gabors(
+
+
+def my_loss_feature(output, target):
+    target = target.unsqueeze(1)
+    errors = (output - target) ** 2
+    return errors.mean()
+
+
+def my_loss_spatial(output, target):
+    # Loss function that computes the mean squared error, with target being the angle in radians
+    target_x = torch.cos(target).unsqueeze(-1)
+    target_y = torch.sin(target).unsqueeze(-1)
+    output_x = output[:, :, 0]
+    output_y = output[:, :, 1]
+
+    x_errors = (output_x - target_x) ** 2
+    y_errors = (output_y - target_y) ** 2
+    return (x_errors + y_errors).mean()
+
+
+def _make_gabors(
     size: int,
     sigma: float,
     theta: torch.Tensor,
     Lambda: float,
     psi: float,
     gamma: float,
-    ) -> torch.Tensor:
+    device: torch.device,
+) -> torch.Tensor:
     """Draw one or a batch of Gabor patches.
 
     Args:
@@ -41,7 +61,7 @@ def make_gabors(
     sigma_y = sigma / gamma
 
     # Bounding box
-    s = torch.linspace(-1, 1, size)
+    s = torch.linspace(-1, 1, size, device=device)
 
     (x, y) = torch.meshgrid(s, s, indexing="xy")
 
@@ -56,13 +76,8 @@ def make_gabors(
     ) * torch.cos(2 * torch.pi / Lambda * x_theta + psi)
     return gb
 
-def generate_gabor_features(
-    angles, 
-    colors, 
-    model, 
-    device, 
-    preprocess
-    ) -> torch.Tensor:
+
+def generate_gabor_features(angles, colors, model, device, preprocess) -> torch.Tensor:
     """
     Generate Gabor patches with color encoding and extract features using a CNN model.
 
@@ -77,8 +92,14 @@ def generate_gabor_features(
         torch.Tensor: Extracted features (flattened)
     """
     # Generate Gabor patches
-    gabors = make_gabors(
-        size=232, sigma=0.4, theta=angles / 2, Lambda=0.25, psi=0, gamma=1
+    gabors = _make_gabors(
+        size=232,
+        sigma=0.4,
+        theta=angles / 2,
+        Lambda=0.25,
+        psi=0,
+        gamma=1,
+        device=device,
     )
     # Normalize to [0, 74] range
     gabors = (gabors + 1) / 2 * 74
@@ -94,7 +115,7 @@ def generate_gabor_features(
     # Convert LAB to RGB with warning suppression
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=UserWarning)
-        gabors = lab2rgb(gabors.numpy(), channel_axis=1)
+        gabors = lab2rgb(gabors.cpu().numpy(), channel_axis=1)
 
     # Preprocess and extract features
     gabors = preprocess(torch.from_numpy(gabors)).to(device)
