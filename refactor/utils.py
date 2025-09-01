@@ -3,22 +3,39 @@ import warnings
 from skimage.color import lab2rgb
 
 
-def my_loss_feature(output, target):
+def my_loss_feature(target, outputs):
     target = target.unsqueeze(1)
-    errors = (output - target) ** 2
+    errors = (outputs - target) ** 2
     return errors.mean()
 
 
-def my_loss_spatial(output, target):
+def my_loss_spatial(target, outputs):
     # Loss function that computes the mean squared error, with target being the angle in radians
     target_x = torch.cos(target).unsqueeze(-1)
     target_y = torch.sin(target).unsqueeze(-1)
-    output_x = output[:, :, 0]
-    output_y = output[:, :, 1]
+    output_x = outputs[:, :, 0]
+    output_y = outputs[:, :, 1]
 
     x_errors = (output_x - target_x) ** 2
     y_errors = (output_y - target_y) ** 2
     return (x_errors + y_errors).mean()
+
+
+def criterion(batch, params):
+    if params.input_type == "spatial" or params.output_type == "angle":
+        target = batch["target_angles"]
+        outputs = batch["outputs"]
+        return my_loss_spatial(target, outputs)
+    else:
+        target = generate_gabor_features(
+            batch["target_angles"],
+            batch["colors"],
+            params.model,
+            params.device,
+            params.preprocess,
+        )
+        outputs = batch["outputs"]
+        return my_loss_feature(target, outputs)
 
 
 def _make_gabors(

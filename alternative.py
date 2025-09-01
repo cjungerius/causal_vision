@@ -7,7 +7,7 @@ from refactor.generators import (
 from refactor.rnn import RNN
 from refactor.trial import Trial
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
-from refactor.utils import my_loss_feature, my_loss_spatial
+from refactor.utils import criterion
 from tqdm import tqdm
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Callable
@@ -166,12 +166,6 @@ def run_experiment(
 
     # define the training machinery: optimizer and so forth.
     opt = torch.optim.Adam(rnn.parameters(), params.lr)
-
-    if params.input_type == "spatial" or params.output_type == "angle":
-        criterion = my_loss_spatial
-    else:
-        criterion = my_loss_feature  # this requires us to create a feature vector from the target too!
-
     # now at long last, we can run the training!
     losses = []
     epochs = (
@@ -182,7 +176,7 @@ def run_experiment(
     for b in epochs:
         opt.zero_grad()
         batch = trial.run_batch(rnn, params.batch_size, False)
-        batch_loss = criterion(batch["outputs"], batch["target_angles"])
+        batch_loss = criterion(batch, params)
         batch_loss.backward()
         opt.step()
         losses.append(batch_loss.item())
