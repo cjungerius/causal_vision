@@ -1,6 +1,8 @@
 **/__pycache__/
 /.ipynb_checkpoints/
 /progress_files/
+/archive/
+/reports/
 *.out
 *.png
 *.pth
