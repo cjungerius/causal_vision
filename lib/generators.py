@@ -391,9 +391,8 @@ class FeatureStimuliGenerator(StimuliGenerator):
 
     def compute_representation(self, *features):
         if self.dim == 1:
-            colors = torch.zeros_like(features[0])  # fake color for 1D
             return generate_gabor_features(
-                features[0], colors, self.model, self.device, self.preprocess
+                features[0], None, self.model, self.device, self.preprocess
             )
         else:
             return generate_gabor_features(

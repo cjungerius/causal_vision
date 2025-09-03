@@ -43,7 +43,7 @@ def criterion(batch, params):
     else:
         target = generate_gabor_features(
             batch["target_angles"],
-            batch["target_colors"] if "target_colors" in batch else torch.zeros_like(batch["target_angles"]),
+            batch.get("target_colors", None),
             params.model,
             params.device,
             params.preprocess,
@@ -78,7 +78,6 @@ def _make_gabors(
             Dtype/device follow PyTorch promotion rules between theta and the grid.
 
     Notes:
-        - Uses torch.meshgrid(indexing="xy"); orientation is measured from the x-axis.
         - The grid is created on CPU with default float dtype; pass theta on CPU or
           adapt the function to build the grid on theta.device/dtype.
 
@@ -94,7 +93,7 @@ def _make_gabors(
     # Bounding box
     s = torch.linspace(-1, 1, size, device=device)
 
-    (x, y) = torch.meshgrid(s, s, indexing="xy")
+    (x, y) = torch.meshgrid(s, s, indexing="ij")
 
     theta = theta.view(*theta.shape, 1, 1)
 
@@ -136,13 +135,15 @@ def generate_gabor_features(angles, colors, model, device, preprocess) -> torch.
     gabors = (gabors + 1) / 2 * 74
 
     # Convert to (C, H, W) format and add color channels
-    gabors = gabors.unsqueeze(1)  # Add channel dimension
-    gabors = gabors.repeat(1, 3, 1, 1)  # Expand to 3 channels
+    gabors = gabors.unsqueeze(1).repeat(1, 3, 1, 1)
 
-    # Encode colors in LAB space (L=74, a=cos*37, b=sin*37)
-    gabors[:, 1, :, :] = torch.cos(colors).view(*colors.shape, 1, 1) * 37
-    gabors[:, 2, :, :] = torch.sin(colors).view(*colors.shape, 1, 1) * 37
-
+    # Encode LAB
+    if colors is None:
+        gabors[:, 1, :, :] = 0
+        gabors[:, 2, :, :] = 0
+    else:
+        gabors[:, 1, :, :] = torch.cos(colors).view(*colors.shape, 1, 1) * 37
+        gabors[:, 2, :, :] = torch.sin(colors).view(*colors.shape, 1, 1) * 37
     # Convert LAB to RGB with warning suppression
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=UserWarning)
