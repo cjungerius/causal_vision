@@ -9,6 +9,9 @@ from torch.distributions import VonMises
 from torchvision.models import ConvNeXt_Base_Weights, convnext_base
 from .utils import generate_gabor_features
 
+import numpy as np
+from scipy.special import iv as besselI
+
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
@@ -98,6 +101,151 @@ class DataGenerator:
     def _sample_noise(self, values, idx):
         return (values + self.vms[idx].sample((len(values),))) % (2 * pi)
 
+    def inv_logit(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def estimate_shared_likelihood(self, x1, x2, kappa):
+        delta_x = np.abs(x1 - x2)
+        delta_x = np.where(delta_x > np.pi, 2 * np.pi - delta_x, delta_x)
+        kappa_eff = 2 * kappa * np.cos(delta_x / 2)
+        marginal_likelihood = besselI(0, kappa_eff) / (
+            (2 * np.pi) ** 2 * besselI(0, kappa) ** 2
+        )
+        return marginal_likelihood
+
+    def compute_p_shared(self, x1, x2, kappa, p=0.5):
+        lik_shared = self.estimate_shared_likelihood(x1, x2, kappa)
+        lik_indep = (1 / (2 * np.pi)) ** 2
+
+        log_p1 = np.log(p) + np.log(lik_shared)
+        log_p2 = np.log(1 - p) + np.log(lik_indep)
+
+        posterior_prob_shared = self.inv_logit(log_p1 - log_p2)
+        return posterior_prob_shared
+
+    def calc_mixture_circ_mean(self, theta, kappa_1, kappa_2, mu_1, mu_2):
+        # Compute characteristic functions
+        r1 = besselI(1, kappa_1) / besselI(0, kappa_1)  # Mean resultant length
+        r2 = besselI(1, kappa_2) / besselI(0, kappa_2)
+
+        # Complex representation
+        z1 = r1 * np.exp(1j * mu_1)
+        z2 = r2 * np.exp(1j * mu_2)
+
+        # Mixture characteristic function
+        z_mix = theta * z1 + (1 - theta) * z2
+
+        # Extract circular mean
+        return np.angle(z_mix)
+
+    def compute_circular_mean(self, angle1, angle2):
+        """Compute circular mean of two angles"""
+        # Convert to unit vectors and average
+        x = np.cos(angle1) + np.cos(angle2)
+        y = np.sin(angle1) + np.sin(angle2)
+        return np.arctan2(y, x)
+
+    def compute_ideal_observer_estimates_1d(
+        self, first_inputs, second_inputs, kappa_tilde, p_prior
+    ):
+        """Compute ideal observer estimates for a batch of inputs"""
+        estimates = []
+
+        first_np = first_inputs.detach().cpu().numpy()
+        second_np = second_inputs.detach().cpu().numpy()
+
+        for i in range(len(first_np)):
+            p_shared = self.compute_p_shared(
+                first_np[i], second_np[i], kappa_tilde, p_prior
+            )
+            mu_shared = self.compute_circular_mean(first_np[i], second_np[i]) % (2 * np.pi)
+
+            delta_x = abs(first_np[i] - second_np[i])
+            if delta_x > np.pi:
+                delta_x = 2 * np.pi - delta_x
+            kappa_eff = 2 * kappa_tilde * np.cos(delta_x / 2)
+
+            est = self.calc_mixture_circ_mean(
+                p_shared, kappa_eff, kappa_tilde, mu_shared, first_np[i]
+            )
+            estimates.append(float(est % (2 * np.pi)))
+
+        return torch.tensor(estimates, dtype=first_inputs.dtype, device=first_inputs.device)
+
+    def compute_ideal_observer_estimates_2d(
+        self, target_angles, target_colors, distractor_angles, distractor_colors
+    ):
+        # Convert to numpy for likelihood calcs and stable normalization
+        ta = target_angles.detach().cpu().numpy()
+        tc = target_colors.detach().cpu().numpy()
+        da = distractor_angles.detach().cpu().numpy()
+        dc = distractor_colors.detach().cpu().numpy()
+
+        angles_lik_shared = self.estimate_shared_likelihood(ta, da, self.kappas[0])
+        colors_lik_shared = self.estimate_shared_likelihood(tc, dc, self.kappas[1])
+
+        # Prior over 4 cases (same/same, same/diff, diff/same, diff/diff)
+        p1, p2 = self.ps
+        r = (p1 * (1.0 - p1) * p2 * (1.0 - p2)) ** 0.5
+        prob = np.array(
+            [
+                p1 * p2 + self.q * r,
+                p1 * (1.0 - p2) - self.q * r,
+                (1.0 - p1) * p2 - self.q * r,
+                (1.0 - p1) * (1.0 - p2) + self.q * r,
+            ],
+            dtype=np.float64,
+        )
+
+        log_2pi = np.log(2 * np.pi)
+
+        # Per-sample log unnormalized posteriors over 4 cases
+        c1 = np.log(prob[0]) + np.log(angles_lik_shared) + np.log(colors_lik_shared)
+        c2 = np.log(prob[1]) + np.log(angles_lik_shared) - 2 * log_2pi
+        c3 = np.log(prob[2]) + np.log(colors_lik_shared) - 2 * log_2pi
+        c4 = np.log(prob[3]) - 4 * log_2pi.repeat(c1.size)
+
+        logc = np.stack([c1, c2, c3, c4], axis=0)              # (4, B)
+        m = np.max(logc, axis=0, keepdims=True)                # stabilize per-sample
+        post = np.exp(logc - m)
+        post /= np.sum(post, axis=0, keepdims=True)            # normalize per-sample
+
+        # Posterior that the angle dimension is "shared"
+        p_shared_angle = post[0] + post[1]                     # (B,)
+
+        # Shared-component params for angle
+        delta_x = np.abs(ta - da)
+        delta_x = np.where(delta_x > np.pi, 2 * np.pi - delta_x, delta_x)
+        kappa_eff = 2 * self.kappas[0] * np.cos(delta_x / 2)
+        mu_shared = self.compute_circular_mean(ta, da) % (2 * np.pi)
+
+        estimates = []
+        for i in range(ta.shape[0]):
+            est = self.calc_mixture_circ_mean(
+                p_shared_angle[i], kappa_eff[i], self.kappas[0], mu_shared[i], ta[i]
+            )
+            estimates.append(float(est % (2 * np.pi)))
+
+        return torch.tensor(estimates, dtype=target_angles.dtype, device=target_angles.device)
+# ...existing code...
+
+    def _ideal_observer(self, batch):
+        if self.dim == 1:
+            estimates = self.compute_ideal_observer_estimates_1d(
+                batch["target_angles_observed"],
+                batch["distractor_angles_observed"],
+                self.kappas[0],
+                self.ps[0],
+            )
+        else:
+            estimates = self.compute_ideal_observer_estimates_2d(
+                batch["target_angles_observed"],
+                batch["target_colors_observed"],
+                batch["distractor_angles_observed"],
+                batch["distractor_colors_observed"],
+            )
+        return estimates
+
     def __call__(self, batch_size: int):
         targets = [self._generate_angles(batch_size) for _ in range(self.dim)]
         distractors = [self._generate_angles(batch_size) for _ in range(self.dim)]
@@ -134,6 +282,7 @@ class DataGenerator:
             self._sample_noise(d, i) for i, d in enumerate(distractors)
         ]
 
+
         # Prepare output dictionary
         result = {}
         for i in range(self.dim):
@@ -144,6 +293,9 @@ class DataGenerator:
             result[f"distractor_{key}_observed"] = distractors_observed[i].to(
                 self.device
             )
+
+        ideal_angle_estimates = self._ideal_observer(result)
+        result["ideal_observer_estimates"] = ideal_angle_estimates
 
         return result
 
@@ -305,4 +457,5 @@ if __name__ == "__main__":
         tuple(feat_target.shape),
         tuple(feat_distr.shape),
     )
+
 # %%

@@ -7,7 +7,7 @@ from refactor.generators import (
 from refactor.rnn import RNN
 from refactor.trial import Trial
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
-from refactor.utils import criterion
+from refactor.utils import criterion, my_loss_spatial
 from tqdm import tqdm
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Callable
@@ -183,6 +183,12 @@ def run_experiment(
 
         if (b + 1) % 10 == 0:
             print(f"\nbatch {b + 1} loss: {batch_loss}")
+            if params.output_type == "angle":
+                with torch.no_grad():
+                    io_angles = batch["ideal_observer_estimates"].to(params.device)  # [B]
+                    io_vec = torch.stack([torch.cos(io_angles), torch.sin(io_angles)], dim=-1).unsqueeze(1)  # [B,1,2]
+                    ideal_loss = my_loss_spatial(batch["target_angles"], io_vec)
+                print(f"\nideal observer loss: {ideal_loss.item()}")
 
     experiment_output = {"params": params, "rnn": rnn, "losses": losses}
 
@@ -192,6 +198,7 @@ def run_experiment(
 if __name__ == "__main__":
     run_experiment(
         input_type="feature",
+        output_type="angle",
         dims=2,
         p=[0.5, 0.5],
         kappas=[8.0, 8.0],

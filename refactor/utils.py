@@ -29,7 +29,7 @@ def criterion(batch, params):
     else:
         target = generate_gabor_features(
             batch["target_angles"],
-            batch["colors"],
+            batch["target_colors"],
             params.model,
             params.device,
             params.preprocess,
