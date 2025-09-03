@@ -25,7 +25,7 @@ class ExperimentParams:
     # Model architecture
     input_size: int = 30
     hidden_size: int = 100
-    output_type: Literal["angle", "feature"] = "angle"
+    output_type: Literal["angle", "feature", "angle_color"] = "angle"
 
     # Stimulus tuning
     tuning_concentration: float = 8.0
@@ -72,6 +72,8 @@ class ExperimentParams:
         # Output size depends on task type
         if self.input_type == "spatial" or self.output_type == "angle":
             self.output_size = 2
+        elif self.output_type == "angle_color":
+            self.output_size = 4
         else:
             self.output_size = 128
 
@@ -84,13 +86,13 @@ def run_experiment(
     kappas: List[float] = [8],
     input_size: int = 10,
     hidden_size: int = 100,
-    output_type: Literal["angle", "feature"] = "angle",
+    output_type: Literal["angle", "feature", "angle_color"] = "angle",
     tuning_concentration: float = 8.0,
     A: float = 1.0,
     dt: float = 0.01,
     tau: float = 0.25,
     eps1: float = 0.8,
-    C: float = 0.1,
+    C: float = 0.01,
     lr: float = 0.001,
     batch_size: int = 200,
     num_batches: int = 2000,
@@ -101,6 +103,7 @@ def run_experiment(
     params = ExperimentParams(
         dims=dims,
         input_type=input_type,
+        input_size=input_size,
         p=p,
         q=q,
         kappas=kappas,
@@ -192,7 +195,7 @@ def run_experiment(
                         [torch.cos(io_angles), torch.sin(io_angles)], dim=-1
                     ).unsqueeze(1)  # [B,1,2]
                     ideal_loss = my_loss_spatial(batch["target_angles"], io_vec)
-                print(f"\nideal observer loss: {ideal_loss.item()}")
+                print(f"ideal observer loss: {ideal_loss.item()}")
 
     experiment_output = {"params": params, "rnn": rnn, "losses": losses}
 
@@ -201,15 +204,18 @@ def run_experiment(
 
 if __name__ == "__main__":
     run_experiment(
-        input_type="spatial",
-        output_type="angle",
-        dims=1,
-        p=[0.5],  # 0.5],
-        kappas=[8.0],  # 8.0],
-        # q=0.2,
+        input_type="feature",
+        input_size=128,
+        output_type="angle_color",
+        dims=2,
+        p=[2/5, 2/5],
+        kappas=[7.0, 7.0],
+        q = 0.25,
+        tuning_concentration=3.0,
+        C=0.01,
+        lr=5e-4,
         interactive=True,
-        batch_size=100,
+        batch_size=25,
         num_batches=2000,
-        input_size=30,
         hidden_size=200,
     )
