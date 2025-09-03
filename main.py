@@ -18,12 +18,12 @@ class ExperimentParams:
     # Core task setup
     dims: int = 1
     input_type: Literal["spatial", "feature"] = "spatial"
+    input_size: int = 10  # spatial grid size per dimension
     p: float | List[float] = field(default_factory=lambda: [0.5])
     q: float = 0
     kappas: List[float] = field(default_factory=lambda: [8])
 
     # Model architecture
-    input_size: int = 30
     hidden_size: int = 100
     output_type: Literal["angle", "feature", "angle_color"] = "angle"
 
@@ -55,36 +55,30 @@ class ExperimentParams:
         self.eps2 = (1.0 - self.eps1**2) ** 0.5
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Load ConvNeXt with pretrained weights
-        weights = ConvNeXt_Base_Weights.DEFAULT
-        model = convnext_base(weights=weights)
-        model.to(self.device)
-        model.eval()
-
-        # Use only first two layers for feature extraction
-        model.features = torch.nn.Sequential(*list(model.features.children())[:2])
-        for p in model.features.parameters():
-            p.requires_grad = False
-
-        self.model = model
-        self.preprocess = weights.transforms()
-
-        # Output size depends on task type
-        if self.input_type == "spatial" or self.output_type == "angle":
-            self.output_size = 2
-        elif self.output_type == "angle_color":
-            self.output_size = 4
+        # Only set up the CNN if using feature inputs
+        if self.input_type == "feature":
+            weights = ConvNeXt_Base_Weights.DEFAULT
+            model = convnext_base(weights=weights)
+            model.to(self.device)
+            model.eval()
+            # Use only first two layers for feature extraction
+            model.features = torch.nn.Sequential(*list(model.features.children())[:2])
+            for p in model.features.parameters():
+                p.requires_grad = False
+            self.model = model
+            self.preprocess = weights.transforms()
         else:
-            self.output_size = 128
-
+            self.model = None
+            self.preprocess = None
+        # output_size is set later after stimuli is constructed
 
 def run_experiment(
     dims: int = 1,
     input_type: Literal["spatial", "feature"] = "spatial",
+    input_size: int = 10,
     p: List[float] = [0.5],
     q: float = 0,
     kappas: List[float] = [8],
-    input_size: int = 10,
     hidden_size: int = 100,
     output_type: Literal["angle", "feature", "angle_color"] = "angle",
     tuning_concentration: float = 8.0,
@@ -140,6 +134,15 @@ def run_experiment(
     else:
         raise ValueError(f"invalid input type {params.input_type} specified")
 
+    # Derive sizes after stimuli is known
+    rnn_input_size = stimuli.n_inputs
+    if params.output_type == "angle":
+        params.output_size = 2
+    elif params.output_type == "angle_color":
+        params.output_size = 4
+    else:  # "feature"
+        params.output_size = rnn_input_size
+
     # next: how does a trial look, i.e., what are the phases the network goes through, when does it get which inputs, and when does it output?
     trial = Trial(params.dt, params.C, params.eps1, datagen, stimuli)
     # T_prestim = 0.1     # in seconds
@@ -153,11 +156,7 @@ def run_experiment(
     trial.add_phase("resp", 0.1, "blank", True)
 
     # next up: what does the model look like? input depends on the stimuli generator, hidden state is defined by us, output depends on the output type
-
-    if params.input_type == "spatial":
-        rnn_input_size = params.input_size**params.dims
-    else:
-        rnn_input_size = params.input_size
+     
     rnn = RNN(
         rnn_input_size,
         params.hidden_size,
