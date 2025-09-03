@@ -7,7 +7,7 @@ from lib.generators import (
 from lib.rnn import RNN
 from lib.trial import Trial
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
-from lib.utils import criterion, my_loss_spatial, analyze_test_batch_angles, vizualize_test_output
+from lib.utils import criterion, my_loss_spatial, analyze_test_batch, vizualize_test_output
 from tqdm import tqdm
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Callable
@@ -252,23 +252,24 @@ def add_test_batch(experiment_output, test_batch_size):
 
 if __name__ == "__main__":
     output = run_experiment(
-        input_type="spatial",
-        output_type="angle",
+        input_type="feature",
+        output_type="feature",
         dims=1,
         p=[2/5],
         kappas=[7.0],
+        q = 0,
         tuning_concentration=3.0,
         C=0.01,
         lr=5e-4,
         interactive=True,
-        batch_size=100,
-        num_batches=3000,
+        batch_size=10,
+        num_batches=200,
         hidden_size=200,
-        test_batch_size=1000
+        test_batch_size=50
     )
 
-    test_batch = add_test_batch(output, 1000)
-    test_output = analyze_test_batch_angles(test_batch)
+    #output['test_batch'] = add_test_batch(output, 1000)
+    test_output = analyze_test_batch(output)
     vizualize_test_output(test_output)
 
     plt.plot(output["losses"])

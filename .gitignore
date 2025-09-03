@@ -3,6 +3,7 @@
 /progress_files/
 /archive/
 /reports/
+/decoders/
 *.out
 *.png
 *.pth

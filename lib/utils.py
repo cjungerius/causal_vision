@@ -1,9 +1,11 @@
 import torch
+from torch import nn
+import torch.nn.functional as F
 import warnings
 from skimage.color import lab2rgb
 import matplotlib.pyplot as plt
 import numpy as np
-
+import pickle
 
 def my_loss_feature(target, outputs):
     target = target.unsqueeze(1)
@@ -41,7 +43,7 @@ def criterion(batch, params):
     else:
         target = generate_gabor_features(
             batch["target_angles"],
-            batch["target_colors"],
+            batch["target_colors"] if "target_colors" in batch else torch.zeros_like(batch["target_angles"]),
             params.model,
             params.device,
             params.preprocess,
@@ -155,10 +157,18 @@ def generate_gabor_features(angles, colors, model, device, preprocess) -> torch.
 
     return features
 
-def analyze_test_batch_angles(batch):
+def analyze_test_batch(output):
+
+    batch = output['test_batch']
     theta = batch['target_angles']
-    xy = batch['outputs']
-    xy = batch['outputs'].mean(dim=1)
+
+    # check if we're working with a batch from an angle or feature network
+    if output['params'].output_type == 'angle':
+        xy = batch['outputs']
+        xy = batch['outputs'].mean(dim=1)
+    elif output['params'].output_type == 'feature':
+        xy = decoder(batch['outputs'].mean(dim=1), use_nn_decoder=True, device=output['params'].device)
+
     theta_hat = torch.arctan2(xy[:,1], xy[:,0])
 
     delta_theta = (batch['target_angles_observed'] - batch['distractor_angles_observed']) % (2*torch.pi)
@@ -178,8 +188,43 @@ def analyze_test_batch_angles(batch):
         "ideal_observer": delta_ideal
     }
 
-def vizualize_test_output(test_output):
+def decoder(features, use_nn_decoder=False, device="cpu"):
+
+    class MyModel(nn.Module):
+        def __init__(self, input_size, N, output_size):
+            super().__init__()
+            self.fc1 = nn.Linear(input_size, N)
+            self.fc2 = nn.Linear(N,N)
+            self.fc3 = nn.Linear(N,output_size)
+        
+        def forward(self, x):
+            x = F.relu(self.fc1(x))
+            x = F.relu(self.fc2(x))
+            x = self.fc3(x)
+            return x
+
+    nn_decoder = MyModel(128,100,2)
+    nn_decoder.to(device)
+
+    try:
+        nn_decoder.load_state_dict(torch.load("decoders/vector_angle_decoder_nn.pth", map_location=device))
+    except FileNotFoundError:
+        print("No saved NN decoder parameters found. Starting with random initialization.")
+
+    # load SVM decoder from pickle:
+    with open("decoders/vector_angle_decoder_svm.pkl", "rb") as f:
+        svm_decoder = pickle.load(f)
+
+
+    if not use_nn_decoder:
+        prediction = svm_decoder.predict(features.cpu())
+    else:
+        prediction = nn_decoder(features).detach().cpu()
     
+    return prediction
+
+def vizualize_test_output(test_output, dims=1):
+
     fig, axes = plt.subplots(2, figsize=(10, 12))
 
     axes[0].scatter(test_output['theta'].cpu(), test_output['theta_hat'].cpu() % (2 * torch.pi), alpha=0.5)
@@ -188,19 +233,26 @@ def vizualize_test_output(test_output):
     axes[0].set_title("Angle Prediction")
     axes[0].axis("equal")
 
-    # calc sliding window circular avg
-    x_vals, circ_mean_vals = calc_sliding_window_avg(test_output['delta_theta'], test_output['error_theta'])
-    sorted_idx = np.argsort(test_output['delta_theta'].cpu().numpy())
+    if dims == 1:
 
-    axes[1].plot(x_vals, circ_mean_vals, label="Circular Avg", color="red", linestyle='--')
-    axes[1].plot(test_output['delta_theta'].cpu()[sorted_idx], test_output['ideal_observer'].cpu()[sorted_idx], label="Ideal Observer", color="blue", linestyle='--')
-    axes[1].scatter(test_output['delta_theta'].cpu(), test_output['error_theta'].cpu(), alpha=0.5)
-    axes[1].set_xlabel("Delta Angle (rad)")
-    axes[1].set_ylabel("Error Angle (rad)")
-    axes[1].set_title("Angle Error")
+        # calc sliding window circular avg
+        x_vals, circ_mean_vals = calc_sliding_window_avg(test_output['delta_theta'], test_output['error_theta'])
+        sorted_idx = np.argsort(test_output['delta_theta'].cpu().numpy())
+
+        axes[1].plot(x_vals, circ_mean_vals, label="Circular Avg", color="red", linestyle='--')
+        axes[1].plot(test_output['delta_theta'].cpu()[sorted_idx], test_output['ideal_observer'].cpu()[sorted_idx], label="Ideal Observer", color="blue", linestyle='--')
+        axes[1].scatter(test_output['delta_theta'].cpu(), test_output['error_theta'].cpu(), alpha=0.5)
+        axes[1].set_xlabel("Delta Angle (rad)")
+        axes[1].set_ylabel("Error Angle (rad)")
+        axes[1].set_title("Angle Error")
+    elif dims == 2:
+        # Handle 2D case
+
+        pass
 
     plt.tight_layout()
     plt.show()
+    
     return
 
 def calc_sliding_window_avg(delta_theta, error_theta):
