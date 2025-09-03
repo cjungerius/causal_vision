@@ -8,12 +8,14 @@ from lib.rnn import RNN
 from lib.trial import Trial
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
 from lib.utils import criterion, my_loss_spatial, analyze_test_batch, vizualize_test_output
+from lib.save import save_experiment, to_cpu
 from tqdm import tqdm
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Callable
 
 import matplotlib.pyplot as plt
-
+import os
+from datetime import datetime
 
 @dataclass
 class ExperimentParams:
@@ -182,6 +184,7 @@ def run_experiment(
         if params.interactive
         else range(params.num_batches)
     )
+    test_batch = None
     for b in epochs:
         opt.zero_grad()
         batch = trial.run_batch(rnn, params.batch_size, False)
@@ -253,7 +256,7 @@ def add_test_batch(experiment_output, test_batch_size):
 if __name__ == "__main__":
     output = run_experiment(
         input_type="feature",
-        output_type="feature",
+        output_type="angle",
         dims=1,
         p=[2/5],
         kappas=[7.0],
@@ -265,17 +268,28 @@ if __name__ == "__main__":
         batch_size=10,
         num_batches=200,
         hidden_size=200,
-        test_batch_size=50
+        test_batch_size=100
     )
 
     #output['test_batch'] = add_test_batch(output, 1000)
     test_output = analyze_test_batch(output)
-    vizualize_test_output(test_output)
+    
+    output_folder = "output"
+    os.makedirs(output_folder, exist_ok=True)
+    
+    # Save a complete experiment snapshot into a timestamped folder
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    exp_dir = os.path.join(output_folder, f"exp-{ts}")
+    os.makedirs(exp_dir, exist_ok=True)
 
+    save_experiment(output, exp_dir, save_test_batch=True, save_cnn_features=False)
+    torch.save(to_cpu(test_output), os.path.join(exp_dir, "test_output.pt"))
+    
+    vizualize_test_output(test_output, fname=os.path.join(exp_dir,"test_performance.png"))
+    
+    plt.close()
     plt.plot(output["losses"])
     plt.xlabel("Batch")
     plt.ylabel("Loss")
     plt.title("Training Loss")
-    plt.show()
-
-
+    plt.savefig(os.path.join(exp_dir, "training_loss.png"))
