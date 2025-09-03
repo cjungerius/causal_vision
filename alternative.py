@@ -23,6 +23,7 @@ class ExperimentParams:
     kappas: List[float] = field(default_factory=lambda: [8])
 
     # Model architecture
+    input_size: int = 30
     hidden_size: int = 100
     output_type: Literal["angle", "feature"] = "angle"
 
@@ -47,7 +48,6 @@ class ExperimentParams:
     device: torch.device = field(init=False)
     model: Optional[torch.nn.Module] = field(init=False)
     preprocess: Optional[Callable] = field(init=False)
-    input_size: int = field(init=False)
     output_size: int = field(init=False)
 
     def __post_init__(self):
@@ -69,11 +69,6 @@ class ExperimentParams:
         self.model = model
         self.preprocess = weights.transforms()
 
-        if self.input_type == "spatial":
-            self.input_size = 2
-        else:
-            self.input_size = 128
-
         # Output size depends on task type
         if self.input_type == "spatial" or self.output_type == "angle":
             self.output_size = 2
@@ -87,7 +82,7 @@ def run_experiment(
     p: List[float] = [0.5],
     q: float = 0,
     kappas: List[float] = [8],
-    input_size: int = 2,
+    input_size: int = 10,
     hidden_size: int = 100,
     output_type: Literal["angle", "feature"] = "angle",
     tuning_concentration: float = 8.0,
@@ -155,8 +150,13 @@ def run_experiment(
     trial.add_phase("resp", 0.1, "blank", True)
 
     # next up: what does the model look like? input depends on the stimuli generator, hidden state is defined by us, output depends on the output type
+
+    if params.input_type == "spatial":
+        rnn_input_size = params.input_size**params.dims
+    else:
+        rnn_input_size = params.input_size
     rnn = RNN(
-        params.input_size,
+        rnn_input_size,
         params.hidden_size,
         params.output_size,
         params.dt,
@@ -181,12 +181,16 @@ def run_experiment(
         opt.step()
         losses.append(batch_loss.item())
 
-        if (b + 1) % 10 == 0:
+        if (b + 1) % 50 == 0:
             print(f"\nbatch {b + 1} loss: {batch_loss}")
             if params.output_type == "angle":
                 with torch.no_grad():
-                    io_angles = batch["ideal_observer_estimates"].to(params.device)  # [B]
-                    io_vec = torch.stack([torch.cos(io_angles), torch.sin(io_angles)], dim=-1).unsqueeze(1)  # [B,1,2]
+                    io_angles = batch["ideal_observer_estimates"].to(
+                        params.device
+                    )  # [B]
+                    io_vec = torch.stack(
+                        [torch.cos(io_angles), torch.sin(io_angles)], dim=-1
+                    ).unsqueeze(1)  # [B,1,2]
                     ideal_loss = my_loss_spatial(batch["target_angles"], io_vec)
                 print(f"\nideal observer loss: {ideal_loss.item()}")
 
@@ -197,13 +201,15 @@ def run_experiment(
 
 if __name__ == "__main__":
     run_experiment(
-        input_type="feature",
+        input_type="spatial",
         output_type="angle",
-        dims=2,
-        p=[0.5, 0.5],
-        kappas=[8.0, 8.0],
-        q=0.2,
+        dims=1,
+        p=[0.5],  # 0.5],
+        kappas=[8.0],  # 8.0],
+        # q=0.2,
         interactive=True,
-        batch_size=20,
-        num_batches=500,
+        batch_size=100,
+        num_batches=2000,
+        input_size=30,
+        hidden_size=200,
     )
