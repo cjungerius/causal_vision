@@ -42,7 +42,7 @@ class Trial:
         # get model device to keep the 0 input on the same device
         device = next(model.parameters()).device
         # initialize
-        batch = self.datagen(batch_size)
+        batch = self.datagen(batch_size, test)
         target_inputs, distractor_inputs = self.stimuli(batch, test)
         eta_tilde = torch.randn(batch_size, N).to(device)
         hidden = model.init_hidden(batch_size)

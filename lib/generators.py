@@ -205,6 +205,7 @@ class DataGenerator:
         c3 = np.log(prob[2]) + np.log(colors_lik_shared) - 2 * log_2pi
         c4 = np.log(prob[3]) - 4 * log_2pi.repeat(c1.size)
 
+
         logc = np.stack([c1, c2, c3, c4], axis=0)              # (4, B)
         m = np.max(logc, axis=0, keepdims=True)                # stabilize per-sample
         post = np.exp(logc - m)
@@ -227,7 +228,6 @@ class DataGenerator:
             estimates.append(float(est % (2 * np.pi)))
 
         return torch.tensor(estimates, dtype=target_angles.dtype, device=target_angles.device)
-# ...existing code...
 
     def _ideal_observer(self, batch):
         if self.dim == 1:
@@ -246,16 +246,17 @@ class DataGenerator:
             )
         return estimates
 
-    def __call__(self, batch_size: int):
+    def __call__(self, batch_size: int, test=False):
         targets = [self._generate_angles(batch_size) for _ in range(self.dim)]
         distractors = [self._generate_angles(batch_size) for _ in range(self.dim)]
 
         if self.dim == 1:
             # For 1D: Replace distractors with targets with prob p1
             p1 = self.ps[0]
-            distractors[0] = torch.where(
-                torch.rand(batch_size) < p1, targets[0], distractors[0]
-            )
+            if not test:
+                distractors[0] = torch.where(
+                    torch.rand(batch_size) < p1, targets[0], distractors[0]
+                )
         else:
             # For 2D with different marginals p1, p2 and coupling q
             p1, p2 = self.ps
@@ -271,10 +272,11 @@ class DataGenerator:
             class_vector = prob.multinomial(batch_size, replacement=True)
 
             # Replace distractors based on combination index
-            distractors[0] = torch.where(class_vector < 2, targets[0], distractors[0])
-            distractors[1] = torch.where(
-                (class_vector == 0) | (class_vector == 2), targets[1], distractors[1]
-            )
+            if not test:
+                distractors[0] = torch.where(class_vector < 2, targets[0], distractors[0])
+                distractors[1] = torch.where(
+                    (class_vector == 0) | (class_vector == 2), targets[1], distractors[1]
+                )
 
         # Add noise
         targets_observed = [self._sample_noise(t, i) for i, t in enumerate(targets)]
@@ -295,7 +297,7 @@ class DataGenerator:
             )
 
         ideal_angle_estimates = self._ideal_observer(result)
-        result["ideal_observer_estimates"] = ideal_angle_estimates
+        result["ideal_observer_estimates"] = ideal_angle_estimates.to(self.device)
 
         return result
 

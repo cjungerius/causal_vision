@@ -7,10 +7,12 @@ from lib.generators import (
 from lib.rnn import RNN
 from lib.trial import Trial
 from torchvision.models import convnext_base, ConvNeXt_Base_Weights
-from lib.utils import criterion, my_loss_spatial
+from lib.utils import criterion, my_loss_spatial, analyze_test_batch_angles, vizualize_test_output
 from tqdm import tqdm
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Callable
+
+import matplotlib.pyplot as plt
 
 
 @dataclass
@@ -42,6 +44,9 @@ class ExperimentParams:
     batch_size: int = 200
     num_batches: int = 2000
     interactive: bool = False
+
+    # Testing
+    test_batch_size: int = 0
 
     # Computed fields (set in __post_init__)
     eps2: float = field(init=False)
@@ -91,6 +96,7 @@ def run_experiment(
     batch_size: int = 200,
     num_batches: int = 2000,
     interactive: bool = False,
+    test_batch_size: int = 0
 ):
     # a much simpler refactor, based on much simpler ideas.
     # step 0: set *all* the parameters we need everywhere in the trial (maybe we modularize these later)
@@ -113,6 +119,7 @@ def run_experiment(
         batch_size=batch_size,
         num_batches=num_batches,
         interactive=interactive,
+        test_batch_size=test_batch_size,
     )
 
     # first: what is the task? 1 dimension, 2 dimensions, which input type? use some logic to make the correct data and stimuli generators.
@@ -195,26 +202,79 @@ def run_experiment(
                     ).unsqueeze(1)  # [B,1,2]
                     ideal_loss = my_loss_spatial(batch["target_angles"], io_vec)
                 print(f"ideal observer loss: {ideal_loss.item()}")
+    
+    # After training, we can get a test batch to see how our model behaves
 
-    experiment_output = {"params": params, "rnn": rnn, "losses": losses}
+    if params.test_batch_size > 0:
+
+        with torch.no_grad():
+            test_batch = trial.run_batch(rnn, params.test_batch_size, True)
+
+    experiment_output = {"params": params, "rnn": rnn, "losses": losses, "test_batch": test_batch}
 
     return experiment_output
 
+def add_test_batch(experiment_output, test_batch_size):
+    # In case you ran an experiment without a test batch and want to generate one later
+    test_data_gen = DataGenerator(
+        experiment_output["params"].dims,
+        experiment_output["params"].kappas,
+        experiment_output["params"].p,
+        experiment_output["params"].q,
+        experiment_output["params"].device
+    )
+
+    if experiment_output["params"].input_type == "spatial":
+        stimuli = SpatialStimuliGenerator(
+            experiment_output["params"].dims,
+            experiment_output["params"].input_size,
+            experiment_output["params"].tuning_concentration,
+            experiment_output["params"].A,
+            experiment_output["params"].device,
+        )
+    elif experiment_output["params"].input_type == "feature":
+        stimuli = FeatureStimuliGenerator(
+            experiment_output["params"].dims, experiment_output["params"].model, experiment_output["params"].device, experiment_output["params"].preprocess
+        )
+    else:
+        raise ValueError(f"invalid input type {experiment_output['params'].input_type} specified")
+
+    test_trial = Trial(experiment_output["params"].dt, experiment_output["params"].C, experiment_output["params"].eps1, test_data_gen, stimuli)
+    test_trial.add_phase("prestim", 0.1, "blank", False)
+    test_trial.add_phase("stim_1", 0.25, "distractor", False)
+    test_trial.add_phase("stim_2", 0.25, "target", False)
+    test_trial.add_phase("resp", 0.1, "blank", True)
+
+    with torch.no_grad():
+        test_batch = test_trial.run_batch(experiment_output["rnn"], test_batch_size, True)
+
+    return test_batch
 
 if __name__ == "__main__":
-    run_experiment(
-        input_type="feature",
-        input_size=128,
-        output_type="angle_color",
-        dims=2,
-        p=[2/5, 2/5],
-        kappas=[7.0, 7.0],
-        q = 0.25,
+    output = run_experiment(
+        input_type="spatial",
+        output_type="angle",
+        dims=1,
+        p=[2/5],
+        kappas=[7.0],
         tuning_concentration=3.0,
         C=0.01,
         lr=5e-4,
         interactive=True,
-        batch_size=25,
-        num_batches=2000,
+        batch_size=100,
+        num_batches=3000,
         hidden_size=200,
+        test_batch_size=1000
     )
+
+    test_batch = add_test_batch(output, 1000)
+    test_output = analyze_test_batch_angles(test_batch)
+    vizualize_test_output(test_output)
+
+    plt.plot(output["losses"])
+    plt.xlabel("Batch")
+    plt.ylabel("Loss")
+    plt.title("Training Loss")
+    plt.show()
+
+
