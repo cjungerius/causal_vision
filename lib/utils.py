@@ -26,6 +26,16 @@ def criterion(batch, params):
         target = batch["target_angles"]
         outputs = batch["outputs"]
         return my_loss_spatial(target, outputs)
+    
+    elif params.output_type == "angle_color":
+        target_1 = batch["target_angles"]
+        target_2 = batch["target_colors"]
+        outputs_1 = batch["outputs"][:, :, :2]
+        outputs_2 = batch["outputs"][:, :, 2:]
+        loss_1 = my_loss_spatial(target_1, outputs_1)
+        loss_2 = my_loss_spatial(target_2, outputs_2)
+        return loss_1 + loss_2
+    
     else:
         target = generate_gabor_features(
             batch["target_angles"],
