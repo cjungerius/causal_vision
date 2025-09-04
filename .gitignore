@@ -1,8 +1,20 @@
-**/__pycache__/
 /.ipynb_checkpoints/
-/progress_files/
 /archive/
 /reports/
 *.out
 *.png
 /output/
+
+uv.lock
+.python-version
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
