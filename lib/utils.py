@@ -6,6 +6,7 @@ from skimage.color import lab2rgb
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
+from .save import to_cpu
 
 def my_loss_feature(target, outputs):
     target = target.unsqueeze(1)
@@ -228,27 +229,38 @@ def vizualize_test_output(test_output, dims=1, fname=None):
 
     fig, axes = plt.subplots(2, figsize=(10, 12))
 
-    axes[0].scatter(test_output['theta'].cpu(), test_output['theta_hat'].cpu() % (2 * torch.pi), alpha=0.5)
+    # Move to CPU and detach
+    test_output = to_cpu(test_output)
+        
+    # Convert to NumPy for Matplotlib
+    theta_np = test_output['theta'].numpy()
+    theta_hat_np = (test_output['theta_hat'] % (2 * torch.pi)).numpy()
+
+    axes[0].scatter(theta_np, theta_hat_np, alpha=0.5)
     axes[0].set_xlabel("True Angle (rad)")
     axes[0].set_ylabel("Predicted Angle (rad)")
     axes[0].set_title("Angle Prediction")
     axes[0].axis("equal")
 
     if dims == 1:
+        # Sliding window circular avg (returns NumPy)
+        x_vals, circ_mean_vals = calc_sliding_window_avg(
+            test_output['delta_theta'], test_output['error_theta']
+        )
 
-        # calc sliding window circular avg
-        x_vals, circ_mean_vals = calc_sliding_window_avg(test_output['delta_theta'], test_output['error_theta'])
-        sorted_idx = np.argsort(test_output['delta_theta'].cpu().numpy())
+        delta_np = test_output['delta_theta'].numpy()
+        ideal_np = test_output['ideal_observer'].numpy()
+        err_np = test_output['error_theta'].numpy()
+        sorted_idx = np.argsort(delta_np)
 
         axes[1].plot(x_vals, circ_mean_vals, label="Circular Avg", color="red", linestyle='--')
-        axes[1].plot(test_output['delta_theta'].cpu()[sorted_idx], test_output['ideal_observer'].cpu()[sorted_idx], label="Ideal Observer", color="blue", linestyle='--')
-        axes[1].scatter(test_output['delta_theta'].cpu(), test_output['error_theta'].cpu(), alpha=0.5)
+        axes[1].plot(delta_np[sorted_idx], ideal_np[sorted_idx], label="Ideal Observer", color="blue", linestyle='--')
+        axes[1].scatter(delta_np, err_np, alpha=0.5)
         axes[1].set_xlabel("Delta Angle (rad)")
         axes[1].set_ylabel("Error Angle (rad)")
         axes[1].set_title("Angle Error")
     elif dims == 2:
         # Handle 2D case
-
         pass
 
     plt.tight_layout()
@@ -266,25 +278,20 @@ def calc_sliding_window_avg(delta_theta, error_theta):
         cos_sum = torch.cos(angles).mean(dim=0)
         return torch.atan2(sin_sum, cos_sum)
 
-
-    sorted_idx = np.argsort(delta_theta)
+    # Work in torch, then return NumPy
+    sorted_idx = torch.argsort(delta_theta)
     delta_theta_sorted = delta_theta[sorted_idx]
     error_theta_sorted = error_theta[sorted_idx]
 
-    # Parameters
-    window_width = np.pi / 10   # e.g. window size ~18°
-    step_size = np.pi / 100     # e.g. step ~1.8°
+    window_width = np.pi / 10
+    step_size = np.pi / 100
     x_vals = np.arange(-np.pi, np.pi, step_size)
 
-    # Compute sliding circular mean
     circ_mean_vals = []
-
     for x in x_vals:
-        # Create sliding window
         lower = x - window_width / 2
         upper = x + window_width / 2
 
-        # Handle circular wraparound (use modular arithmetic)
         if lower < -np.pi:
             mask = (delta_theta_sorted >= (lower + 2 * np.pi)) | (delta_theta_sorted < upper)
         elif upper > np.pi:
@@ -293,11 +300,9 @@ def calc_sliding_window_avg(delta_theta, error_theta):
             mask = (delta_theta_sorted >= lower) & (delta_theta_sorted < upper)
 
         values = error_theta_sorted[mask]
-        if len(values) == 0:
+        if values.numel() == 0:
             circ_mean_vals.append(np.nan)
         else:
-            circ_mean = circular_mean(values)
-            circ_mean_vals.append(circ_mean)
+            circ_mean_vals.append(circular_mean(values).item())
 
-    circ_mean_vals = np.array(circ_mean_vals)
-    return x_vals, circ_mean_vals
+    return x_vals, np.array(circ_mean_vals)
