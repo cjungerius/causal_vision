@@ -181,7 +181,7 @@ def params_from_config(cfg: Dict[str, Any], *, build_cnn: bool = False) -> Any:
 		)
 
 	# Build full ExperimentParams (may build CNN for feature inputs)
-	from main import ExperimentParams  # local import to avoid circular refs at module import
+	from lib.config import ExperimentParams  # local import to avoid circular refs at module import
 
 	p_val = cfg.get("p", [0.5])
 	if p_val is None:

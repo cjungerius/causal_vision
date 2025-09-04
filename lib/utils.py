@@ -162,7 +162,8 @@ def generate_gabor_features(angles, colors, model, device, preprocess) -> torch.
 def analyze_test_batch(output):
 
     batch = output['test_batch']
-    theta = batch['target_angles']
+    theta = batch['target_angles'].cpu()
+    breakpoint()
 
     # check if we're working with a batch from an angle or feature network
     if output['params'].output_type == 'angle':
@@ -216,7 +217,6 @@ def decoder(features, use_nn_decoder=False, device="cpu"):
     # load SVM decoder from pickle:
     with open("decoders/vector_angle_decoder_svm.pkl", "rb") as f:
         svm_decoder = pickle.load(f)
-
 
     if not use_nn_decoder:
         prediction = svm_decoder.predict(features.cpu())
