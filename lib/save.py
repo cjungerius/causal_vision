@@ -52,6 +52,8 @@ def _experiment_params_to_config(params: Any, rnn: torch.nn.Module) -> Dict[str,
 		"kappas": getattr(params, "kappas", None),
 
 		# Model & dynamics
+		"tuning_concentration": getattr(params, "tuning_concentration", None),
+		"A": getattr(params, "A", None),
 		"hidden_size": hidden_size,
 		"rnn_input_size": in_features,
 		"output_type": getattr(params, "output_type", None),
@@ -65,6 +67,7 @@ def _experiment_params_to_config(params: Any, rnn: torch.nn.Module) -> Dict[str,
 		"lr": getattr(params, "lr", None),
 		"batch_size": getattr(params, "batch_size", None),
 		"num_batches": getattr(params, "num_batches", None),
+		"interactive": getattr(params, "interactive", None),
 
 		# Testing
 		"test_batch_size": getattr(params, "test_batch_size", None),
@@ -135,7 +138,89 @@ def save_experiment(
 			torch.save(model.features.state_dict(), os.path.join(out_dir, "cnn_features_state.pt"))
 
 
-def load_experiment(out_dir: str, map_location: Optional[str] = "cpu") -> Dict[str, Any]:
+from types import SimpleNamespace
+
+
+def params_from_config(cfg: Dict[str, Any], *, build_cnn: bool = False) -> Any:
+	"""Recreate a params-like object from a saved config.
+
+	If build_cnn is False (default), returns a lightweight object (SimpleNamespace)
+	with the attributes needed by analysis utilities (e.g., output_type, device).
+	If build_cnn is True, instantiates main.ExperimentParams which may construct
+	the CNN (ConvNeXt) for feature inputs.
+	"""
+	device = torch.device(cfg.get("device", "cpu"))
+
+	if not build_cnn:
+		# Minimal object sufficient for analyze_test_batch and plotting
+		return SimpleNamespace(
+			dims=cfg.get("dims"),
+			input_type=cfg.get("input_type"),
+			input_size=cfg.get("input_size"),
+			p=cfg.get("p"),
+			q=cfg.get("q"),
+			kappas=cfg.get("kappas"),
+			hidden_size=cfg.get("hidden_size"),
+			output_type=cfg.get("output_type"),
+			tuning_concentration=cfg.get("tuning_concentration"),
+			A=cfg.get("A"),
+			dt=cfg.get("dt"),
+			tau=cfg.get("tau"),
+			eps1=cfg.get("eps1"),
+			C=cfg.get("C"),
+			lr=cfg.get("lr"),
+			batch_size=cfg.get("batch_size"),
+			num_batches=cfg.get("num_batches"),
+			interactive=cfg.get("interactive", False),
+			test_batch_size=cfg.get("test_batch_size"),
+			device=device,
+			model=None,
+			preprocess=None,
+			output_size=cfg.get("output_size"),
+			eps2=(1.0 - float(cfg.get("eps1", 0.8)) ** 2) ** 0.5,
+		)
+
+	# Build full ExperimentParams (may build CNN for feature inputs)
+	from main import ExperimentParams  # local import to avoid circular refs at module import
+
+	p_val = cfg.get("p", [0.5])
+	if p_val is None:
+		p_val = [0.5]
+
+	params = ExperimentParams(
+		dims=cfg.get("dims", 1),
+		input_type=cfg.get("input_type", "spatial"),
+		input_size=cfg.get("input_size", 10),
+		p=p_val,
+		q=cfg.get("q", 0.0),
+		kappas=cfg.get("kappas", [8]),
+		hidden_size=cfg.get("hidden_size", 100),
+		output_type=cfg.get("output_type", "angle"),
+		tuning_concentration=cfg.get("tuning_concentration", 8.0),
+		A=cfg.get("A", 1.0),
+		dt=cfg.get("dt", 0.01),
+		tau=cfg.get("tau", 0.25),
+		eps1=cfg.get("eps1", 0.8),
+		C=cfg.get("C", 0.1),
+		lr=cfg.get("lr", 0.001),
+		batch_size=cfg.get("batch_size", 200),
+		num_batches=cfg.get("num_batches", 2000),
+		interactive=cfg.get("interactive", False),
+		test_batch_size=cfg.get("test_batch_size", 0),
+	)
+	# Set saved output_size if present
+	if "output_size" in cfg:
+		params.output_size = cfg["output_size"]
+	return params
+
+
+def load_experiment(
+	out_dir: str,
+	map_location: Optional[str] = "cpu",
+	*,
+	reconstruct_params: bool = True,
+	build_cnn: bool = False,
+) -> Dict[str, Any]:
 	"""Load a previously saved experiment snapshot.
 
 	Returns a dict with keys: config, rnn, losses, test_batch (optional).
@@ -188,4 +273,9 @@ def load_experiment(out_dir: str, map_location: Optional[str] = "cpu") -> Dict[s
 	if os.path.isfile(test_batch_path):
 		test_batch = torch.load(test_batch_path, map_location=map_location)
 
-	return {"config": cfg, "rnn": rnn, "losses": losses, "test_batch": test_batch}
+
+	params_obj = None
+	if reconstruct_params:
+		params_obj = params_from_config(cfg, build_cnn=build_cnn)
+
+	return {"config": cfg, "params": params_obj, "rnn": rnn, "losses": losses, "test_batch": test_batch}
