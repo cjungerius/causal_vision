@@ -163,7 +163,6 @@ def analyze_test_batch(output):
 
     batch = output['test_batch']
     theta = batch['target_angles'].cpu()
-    breakpoint()
 
     # check if we're working with a batch from an angle or feature network
     if output['params'].output_type == 'angle':
