@@ -8,6 +8,12 @@ import numpy as np
 import pickle
 from .save import to_cpu
 
+def circular_distance(angle1, angle2):
+    """Compute the minimum distance between two angles in radians."""
+    delta = (angle1 - angle2) % (2 * torch.pi)
+    delta = torch.where(delta >= torch.pi, delta - 2 * torch.pi, delta)
+    return delta
+
 def my_loss_feature(target, outputs):
     target = target.unsqueeze(1)
     errors = (outputs - target) ** 2
@@ -173,22 +179,26 @@ def analyze_test_batch(output):
 
     theta_hat = torch.arctan2(xy[:,1], xy[:,0])
 
-    delta_theta = (batch['target_angles_observed'] - batch['distractor_angles_observed']) % (2*torch.pi)
-    delta_theta = torch.where(delta_theta >= torch.pi, delta_theta - 2 * torch.pi, delta_theta)
-
-    delta_ideal = (batch['target_angles_observed'] - batch['ideal_observer_estimates']) % (2 * torch.pi)
-    delta_ideal = torch.where(delta_ideal >= torch.pi, delta_ideal - 2 * torch.pi, delta_ideal)
+    delta_theta = circular_distance(batch['target_angles_observed'], batch['distractor_angles_observed'])
+    delta_ideal = circular_distance(batch['target_angles_observed'], batch['ideal_observer_estimates'])
 
     error_theta = (theta - theta_hat) % (2 * torch.pi)
     error_theta = torch.where(error_theta >= torch.pi, error_theta - 2 * torch.pi, error_theta)
 
-    return {
+    if output['params'].dims == 2:
+        delta_color = circular_distance(batch['target_colors_observed'], batch['distractor_colors_observed'])
+
+    test_output = {
         "theta": theta,
         "theta_hat": theta_hat,
         "delta_theta": delta_theta,
         "error_theta": error_theta,
         "ideal_observer": delta_ideal
     }
+    if output['params'].dims == 2:
+        test_output["delta_color"] = delta_color
+    
+    return test_output
 
 def decoder(features, use_nn_decoder=False, device="cpu"):
 
@@ -258,9 +268,24 @@ def vizualize_test_output(test_output, dims=1, fname=None):
         axes[1].set_xlabel("Delta Angle (rad)")
         axes[1].set_ylabel("Error Angle (rad)")
         axes[1].set_title("Angle Error")
+    
     elif dims == 2:
-        # Handle 2D case
-        pass
+        delta_theta_np = test_output['delta_theta'].numpy()
+        delta_color_np = test_output['delta_color'].numpy()
+        err_np = test_output['error_theta'].numpy()
+        ideal_np = test_output['ideal_observer'].numpy()
+        sorted_idx = np.argsort(delta_theta_np)
+
+        sc = axes[1].scatter(delta_theta_np, delta_color_np, c=err_np, cmap='viridis', alpha=0.5)
+        plt.colorbar(sc, ax=axes[1], label='Error Angle (rad)')
+        axes[1].set_xlabel("Delta Angle (rad)")
+        axes[1].set_ylabel("Delta Color (rad)")
+        axes[1].set_title("Angle vs Color Difference Colored by Error")
+
+        # Overlay ideal observer line
+        axes[1].plot(delta_theta_np[sorted_idx], ideal_np[sorted_idx], label="Ideal Observer", color="blue", linestyle='--')
+        axes[1].legend()
+
 
     plt.tight_layout()
     if not fname is None:
