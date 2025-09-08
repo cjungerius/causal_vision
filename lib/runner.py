@@ -75,9 +75,7 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
             print(f"\nbatch {b + 1} loss: {batch_loss}")
             if params.output_type == "angle":
                 with torch.no_grad():
-                    io_angles = batch["ideal_observer_estimates"].to(
-                        params.device
-                    )
+                    io_angles = batch["ideal_observer_estimates"].to(params.device)
                     io_vec = torch.stack(
                         [torch.cos(io_angles), torch.sin(io_angles)], dim=-1
                     ).unsqueeze(1)
@@ -91,7 +89,14 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
     return {"params": params, "rnn": rnn, "losses": losses, "test_batch": test_batch}
 
 
-def run_and_save(params: ExperimentParams, out_dir: str, *, save_test_batch: bool = True, save_cnn_features: bool = False, tag: str = "") -> str:
+def run_and_save(
+    params: ExperimentParams,
+    out_dir: str,
+    *,
+    save_test_batch: bool = True,
+    save_cnn_features: bool = False,
+    tag: str = "",
+) -> str:
     output = run_experiment(params)
     os.makedirs(out_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -99,14 +104,24 @@ def run_and_save(params: ExperimentParams, out_dir: str, *, save_test_batch: boo
     exp_dir = os.path.join(out_dir, f"exp-{ts}{suffix}")
     os.makedirs(exp_dir, exist_ok=True)
 
-    save_experiment(output, exp_dir, save_test_batch=save_test_batch, save_cnn_features=save_cnn_features)
+    save_experiment(
+        output,
+        exp_dir,
+        save_test_batch=save_test_batch,
+        save_cnn_features=save_cnn_features,
+    )
 
-    if not output['test_batch'] is None:
+    if output["test_batch"] is not None:
         test_output = analyze_test_batch(output)
         torch.save(to_cpu(test_output), os.path.join(exp_dir, "test_output.pt"))
-        visualize_test_output(test_output, dims=params['dims'], fname=os.path.join(exp_dir, "test_performance.png"))
+        visualize_test_output(
+            test_output,
+            dims=params.dims,
+            fname=os.path.join(exp_dir, "test_performance.png"),
+        )
 
     import matplotlib.pyplot as plt
+
     plt.close()
     plt.plot(output["losses"])
     plt.xlabel("Batch")
@@ -117,7 +132,12 @@ def run_and_save(params: ExperimentParams, out_dir: str, *, save_test_batch: boo
     return exp_dir
 
 
-def add_test_batch(experiment_output: Dict[str, Any], test_batch_size: int, *, build_cnn_if_needed: bool = True) -> Dict[str, Any]:
+def add_test_batch(
+    experiment_output: Dict[str, Any],
+    test_batch_size: int,
+    *,
+    build_cnn_if_needed: bool = True,
+) -> Dict[str, Any]:
     """Generate a test batch for an existing or loaded experiment.
 
     Accepts either the live training output from run_experiment or a dict
@@ -130,12 +150,21 @@ def add_test_batch(experiment_output: Dict[str, Any], test_batch_size: int, *, b
     cfg = experiment_output.get("config")
 
     # If no params or missing CNN for feature inputs, try to rebuild from config
-    if (params is None or (
-        getattr(params, "input_type", None) == "feature" and getattr(params, "model", None) is None
-    )) and build_cnn_if_needed:
+    if (
+        params is None
+        or (
+            getattr(params, "input_type", None) == "feature"
+            and getattr(params, "model", None) is None
+        )
+    ) and build_cnn_if_needed:
         if cfg is None:
-            raise ValueError("Cannot rebuild params: missing 'config' in experiment_output")
-        from .save import params_from_config  # local import to avoid cycles at module import
+            raise ValueError(
+                "Cannot rebuild params: missing 'config' in experiment_output"
+            )
+        from .save import (
+            params_from_config,
+        )  # local import to avoid cycles at module import
+
         params = params_from_config(cfg, build_cnn=True)
 
     if params is None:
@@ -163,8 +192,13 @@ def add_test_batch(experiment_output: Dict[str, Any], test_batch_size: int, *, b
             runtime_device,
         )
     elif params.input_type == "feature":
-        if getattr(params, "model", None) is None or getattr(params, "preprocess", None) is None:
-            raise ValueError("Feature stimuli requested but params.model/preprocess are missing; set build_cnn_if_needed=True or load with build_cnn=True")
+        if (
+            getattr(params, "model", None) is None
+            or getattr(params, "preprocess", None) is None
+        ):
+            raise ValueError(
+                "Feature stimuli requested but params.model/preprocess are missing; set build_cnn_if_needed=True or load with build_cnn=True"
+            )
         # Ensure CNN is on the runtime device
         params.model.to(runtime_device)
         stimuli = FeatureStimuliGenerator(

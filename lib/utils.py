@@ -8,11 +8,13 @@ import numpy as np
 import pickle
 from .save import to_cpu
 
+
 def circular_distance(angle1, angle2):
     """Compute the minimum distance between two angles in radians."""
     delta = (angle1 - angle2) % (2 * torch.pi)
     delta = torch.where(delta >= torch.pi, delta - 2 * torch.pi, delta)
     return delta
+
 
 def my_loss_feature(target, outputs):
     target = target.unsqueeze(1)
@@ -37,7 +39,7 @@ def criterion(batch, params):
         target = batch["target_angles"]
         outputs = batch["outputs"]
         return my_loss_spatial(target, outputs)
-    
+
     elif params.output_type == "angle_color":
         target_1 = batch["target_angles"]
         target_2 = batch["target_colors"]
@@ -46,7 +48,7 @@ def criterion(batch, params):
         loss_1 = my_loss_spatial(target_1, outputs_1)
         loss_2 = my_loss_spatial(target_2, outputs_2)
         return loss_1 + loss_2
-    
+
     else:
         target = generate_gabor_features(
             batch["target_angles"],
@@ -165,63 +167,79 @@ def generate_gabor_features(angles, colors, model, device, preprocess) -> torch.
 
     return features
 
-def analyze_test_batch(output):
 
-    batch = output['test_batch']
-    theta = batch['target_angles'].cpu()
+def analyze_test_batch(output):
+    batch = output["test_batch"]
+    theta = batch["target_angles"].cpu()
 
     # check if we're working with a batch from an angle or feature network
-    if output['params'].output_type == 'angle':
-        xy = batch['outputs']
-        xy = batch['outputs'].mean(dim=1)
-    elif output['params'].output_type == 'feature':
-        xy = decoder(batch['outputs'].mean(dim=1), use_nn_decoder=True, device=output['params'].device)
+    if output["params"].output_type == "angle":
+        xy = batch["outputs"]
+        xy = batch["outputs"].mean(dim=1)
+    elif output["params"].output_type == "feature":
+        xy = decoder(
+            batch["outputs"].mean(dim=1),
+            use_nn_decoder=True,
+            device=output["params"].device,
+        )
 
-    theta_hat = torch.arctan2(xy[:,1], xy[:,0])
+    theta_hat = torch.arctan2(xy[:, 1], xy[:, 0])
 
-    delta_theta = circular_distance(batch['target_angles_observed'], batch['distractor_angles_observed'])
-    delta_ideal = circular_distance(batch['target_angles_observed'], batch['ideal_observer_estimates'])
+    delta_theta = circular_distance(
+        batch["target_angles_observed"], batch["distractor_angles_observed"]
+    )
+    delta_ideal = circular_distance(
+        batch["target_angles_observed"], batch["ideal_observer_estimates"]
+    )
 
     error_theta = (theta - theta_hat) % (2 * torch.pi)
-    error_theta = torch.where(error_theta >= torch.pi, error_theta - 2 * torch.pi, error_theta)
+    error_theta = torch.where(
+        error_theta >= torch.pi, error_theta - 2 * torch.pi, error_theta
+    )
 
-    if output['params'].dims == 2:
-        delta_color = circular_distance(batch['target_colors_observed'], batch['distractor_colors_observed'])
+    if output["params"].dims == 2:
+        delta_color = circular_distance(
+            batch["target_colors_observed"], batch["distractor_colors_observed"]
+        )
 
     test_output = {
         "theta": theta,
         "theta_hat": theta_hat,
         "delta_theta": delta_theta,
         "error_theta": error_theta,
-        "ideal_observer": delta_ideal
+        "ideal_observer": delta_ideal,
     }
-    if output['params'].dims == 2:
+    if output["params"].dims == 2:
         test_output["delta_color"] = delta_color
-    
+
     return test_output
 
-def decoder(features, use_nn_decoder=False, device="cpu"):
 
+def decoder(features, use_nn_decoder=False, device="cpu"):
     class MyModel(nn.Module):
         def __init__(self, input_size, N, output_size):
             super().__init__()
             self.fc1 = nn.Linear(input_size, N)
-            self.fc2 = nn.Linear(N,N)
-            self.fc3 = nn.Linear(N,output_size)
-        
+            self.fc2 = nn.Linear(N, N)
+            self.fc3 = nn.Linear(N, output_size)
+
         def forward(self, x):
             x = F.relu(self.fc1(x))
             x = F.relu(self.fc2(x))
             x = self.fc3(x)
             return x
 
-    nn_decoder = MyModel(128,100,2)
+    nn_decoder = MyModel(128, 100, 2)
     nn_decoder.to(device)
 
     try:
-        nn_decoder.load_state_dict(torch.load("decoders/vector_angle_decoder_nn.pth", map_location=device))
+        nn_decoder.load_state_dict(
+            torch.load("decoders/vector_angle_decoder_nn.pth", map_location=device)
+        )
     except FileNotFoundError:
-        print("No saved NN decoder parameters found. Starting with random initialization.")
+        print(
+            "No saved NN decoder parameters found. Starting with random initialization."
+        )
 
     # load SVM decoder from pickle:
     with open("decoders/vector_angle_decoder_svm.pkl", "rb") as f:
@@ -231,19 +249,22 @@ def decoder(features, use_nn_decoder=False, device="cpu"):
         prediction = svm_decoder.predict(features.cpu())
     else:
         prediction = nn_decoder(features).detach().cpu()
-    
+
     return prediction
 
-def visualize_test_output(test_output, dims=1, fname=None):
 
-    fig, axes = plt.subplots(2, figsize=(10, 12))
+def visualize_test_output(test_output, dims=1, fname=None):
+    if dims == 1:
+        fig, axes = plt.subplots(2, figsize=(10, 12))
+    else:
+        fig, axes = plt.subplots(3, figsize=(10, 12))
 
     # Move to CPU and detach
     test_output = to_cpu(test_output)
-        
+
     # Convert to NumPy for Matplotlib
-    theta_np = test_output['theta'].numpy()
-    theta_hat_np = (test_output['theta_hat'] % (2 * torch.pi)).numpy()
+    theta_np = test_output["theta"].numpy()
+    theta_hat_np = (test_output["theta_hat"] % (2 * torch.pi)).numpy()
 
     axes[0].scatter(theta_np, theta_hat_np, alpha=0.5)
     axes[0].set_xlabel("True Angle (rad)")
@@ -254,49 +275,64 @@ def visualize_test_output(test_output, dims=1, fname=None):
     if dims == 1:
         # Sliding window circular avg (returns NumPy)
         x_vals, circ_mean_vals = calc_sliding_window_avg(
-            test_output['delta_theta'], test_output['error_theta']
+            test_output["delta_theta"], test_output["error_theta"]
         )
 
-        delta_np = test_output['delta_theta'].numpy()
-        ideal_np = test_output['ideal_observer'].numpy()
-        err_np = test_output['error_theta'].numpy()
+        delta_np = test_output["delta_theta"].numpy()
+        ideal_np = test_output["ideal_observer"].numpy()
+        err_np = test_output["error_theta"].numpy()
         sorted_idx = np.argsort(delta_np)
 
-        axes[1].plot(x_vals, circ_mean_vals, label="Circular Avg", color="red", linestyle='--')
-        axes[1].plot(delta_np[sorted_idx], ideal_np[sorted_idx], label="Ideal Observer", color="blue", linestyle='--')
+        axes[1].plot(
+            x_vals, circ_mean_vals, label="Circular Avg", color="red", linestyle="--"
+        )
+        axes[1].plot(
+            delta_np[sorted_idx],
+            ideal_np[sorted_idx],
+            label="Ideal Observer",
+            color="blue",
+            linestyle="--",
+        )
         axes[1].scatter(delta_np, err_np, alpha=0.5)
         axes[1].set_xlabel("Delta Angle (rad)")
         axes[1].set_ylabel("Error Angle (rad)")
         axes[1].set_title("Angle Error")
-    
-    elif dims == 2:
-        delta_theta_np = test_output['delta_theta'].numpy()
-        delta_color_np = test_output['delta_color'].numpy()
-        err_np = test_output['error_theta'].numpy()
-        ideal_np = test_output['ideal_observer'].numpy()
-        sorted_idx = np.argsort(delta_theta_np)
 
-        sc = axes[1].scatter(delta_theta_np, delta_color_np, c=err_np, cmap='viridis', alpha=0.5)
-        plt.colorbar(sc, ax=axes[1], label='Error Angle (rad)')
+    elif dims == 2:
+        delta_theta_np = test_output["delta_theta"].numpy()
+        delta_color_np = test_output["delta_color"].numpy()
+        err_np = test_output["error_theta"].numpy()
+        ideal_np = test_output["ideal_observer"].numpy()
+
+        vals, xbins, ybins = np.histogram2d(
+            delta_color_np, delta_theta_np, weights=err_np, bins=(40, 40)
+        )
+        ideal_vals, xbins, ybins = np.histogram2d(
+            delta_color_np, delta_theta_np, weights=ideal_np, bins=(40, 40)
+        )
+
+        mesh1 = axes[1].pcolormesh(ybins, xbins, vals, cmap="viridis")
         axes[1].set_xlabel("Delta Angle (rad)")
         axes[1].set_ylabel("Delta Color (rad)")
-        axes[1].set_title("Angle vs Color Difference Colored by Error")
+        axes[1].set_title("Angle Error")
+        fig.colorbar(mesh1, ax=axes[1])
 
-        # Overlay ideal observer line
-        axes[1].plot(delta_theta_np[sorted_idx], ideal_np[sorted_idx], label="Ideal Observer", color="blue", linestyle='--')
-        axes[1].legend()
-
+        mesh2 = axes[2].pcolormesh(ybins, xbins, ideal_vals, cmap="viridis")
+        axes[2].set_xlabel("Delta Angle (rad)")
+        axes[2].set_ylabel("Delta Color (rad)")
+        axes[2].set_title("Ideal Observer")
+        fig.colorbar(mesh2, ax=axes[2])
 
     plt.tight_layout()
-    if not fname is None:
-        plt.savefig(fname)    
+    if fname is not None:
+        plt.savefig(fname)
     else:
         plt.show()
-    
+
     return
 
-def calc_sliding_window_avg(delta_theta, error_theta):
 
+def calc_sliding_window_avg(delta_theta, error_theta):
     def circular_mean(angles: torch.Tensor) -> torch.Tensor:
         sin_sum = torch.sin(angles).mean(dim=0)
         cos_sum = torch.cos(angles).mean(dim=0)
@@ -317,9 +353,13 @@ def calc_sliding_window_avg(delta_theta, error_theta):
         upper = x + window_width / 2
 
         if lower < -np.pi:
-            mask = (delta_theta_sorted >= (lower + 2 * np.pi)) | (delta_theta_sorted < upper)
+            mask = (delta_theta_sorted >= (lower + 2 * np.pi)) | (
+                delta_theta_sorted < upper
+            )
         elif upper > np.pi:
-            mask = (delta_theta_sorted >= lower) | (delta_theta_sorted < (upper - 2 * np.pi))
+            mask = (delta_theta_sorted >= lower) | (
+                delta_theta_sorted < (upper - 2 * np.pi)
+            )
         else:
             mask = (delta_theta_sorted >= lower) & (delta_theta_sorted < upper)
 
