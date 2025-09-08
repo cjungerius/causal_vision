@@ -234,7 +234,7 @@ def decoder(features, use_nn_decoder=False, device="cpu"):
     
     return prediction
 
-def vizualize_test_output(test_output, dims=1, fname=None):
+def visualize_test_output(test_output, dims=1, fname=None):
 
     fig, axes = plt.subplots(2, figsize=(10, 12))
 

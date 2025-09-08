@@ -9,7 +9,7 @@ from .config import ExperimentParams
 from .generators import DataGenerator, SpatialStimuliGenerator, FeatureStimuliGenerator
 from .rnn import RNN
 from .trial import Trial
-from .utils import criterion, my_loss_spatial, analyze_test_batch, vizualize_test_output
+from .utils import criterion, my_loss_spatial, analyze_test_batch, visualize_test_output
 from .save import save_experiment, to_cpu
 
 
@@ -104,7 +104,7 @@ def run_and_save(params: ExperimentParams, out_dir: str, *, save_test_batch: boo
     if not output['test_batch'] is None:
         test_output = analyze_test_batch(output)
         torch.save(to_cpu(test_output), os.path.join(exp_dir, "test_output.pt"))
-        vizualize_test_output(test_output, fname=os.path.join(exp_dir, "test_performance.png"))
+        visualize_test_output(test_output, dims=params['dims'], fname=os.path.join(exp_dir, "test_performance.png"))
 
     import matplotlib.pyplot as plt
     plt.close()
