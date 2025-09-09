@@ -246,59 +246,79 @@ class DataGenerator:
             )
         return estimates
 
-    def __call__(self, batch_size: int, test=False):
-        targets = [self._generate_angles(batch_size) for _ in range(self.dim)]
-        distractors = [self._generate_angles(batch_size) for _ in range(self.dim)]
+    def __call__(self, batch_size: int = None, test=False, structured_test=False, n_delta=20, n_base=8):
+        """
+        Generates a batch of data. If structured_test is True, generates a grid of all combinations
+        of delta and base angles/colors. Otherwise, samples randomly.
+        Returns a dict with the same keys regardless of mode.
+        """
+        # --- Generate target/distractor values ---
+        if structured_test:
+            if self.dim == 1:
+                deltas = torch.linspace(-torch.pi, torch.pi, n_delta)
+                bases = torch.linspace(0, 2 * torch.pi, n_base)
+                grid = torch.cartesian_prod(bases, deltas)
+                target_angles = grid[:, 0]
+                distractor_angles = (target_angles + grid[:, 1]) % (2 * torch.pi)
+                targets = [target_angles]
+                distractors = [distractor_angles]
 
-        if self.dim == 1:
-            # For 1D: Replace distractors with targets with prob p1
-            p1 = self.ps[0]
-            if not test:
-                distractors[0] = torch.where(
-                    torch.rand(batch_size) < p1, targets[0], distractors[0]
-                )
+            else:
+                delta_angles = torch.linspace(-torch.pi, torch.pi, n_delta)
+                delta_colors = torch.linspace(-torch.pi, torch.pi, n_delta)
+                base_angles = torch.linspace(0, 2 * torch.pi, n_base)
+                base_colors = torch.linspace(0, 2 * torch.pi, n_base)
+                grid = torch.cartesian_prod(base_angles, base_colors, delta_angles, delta_colors)
+                target_angles = grid[:, 0]
+                target_colors = grid[:, 1]
+                distractor_angles = (target_angles + grid[:, 2]) % (2 * torch.pi)
+                distractor_colors = (target_colors + grid[:, 3]) % (2 * torch.pi)
+                targets = [target_angles, target_colors]
+                distractors = [distractor_angles, distractor_colors]
+
         else:
-            # For 2D with different marginals p1, p2 and coupling q
-            p1, p2 = self.ps
-            r = (p1 * (1.0 - p1) * p2 * (1.0 - p2)) ** 0.5
-            prob = torch.tensor(
-                [
-                    p1 * p2 + self.q * r,  # (same, same)
-                    p1 * (1.0 - p2) - self.q * r,  # (same, diff)
-                    (1.0 - p1) * p2 - self.q * r,  # (diff, same)
-                    (1.0 - p1) * (1.0 - p2) + self.q * r,  # (diff, diff)
-                ]
-            )
-            class_vector = prob.multinomial(batch_size, replacement=True)
+            targets = [self._generate_angles(batch_size) for _ in range(self.dim)]
+            distractors = [self._generate_angles(batch_size) for _ in range(self.dim)]
 
-            # Replace distractors based on combination index
-            if not test:
-                distractors[0] = torch.where(class_vector < 2, targets[0], distractors[0])
-                distractors[1] = torch.where(
-                    (class_vector == 0) | (class_vector == 2), targets[1], distractors[1]
+            if self.dim == 1:
+                p1 = self.ps[0]
+                if not test:
+                    distractors[0] = torch.where(
+                        torch.rand(batch_size) < p1, targets[0], distractors[0]
+                    )
+            else:
+                p1, p2 = self.ps
+                r = (p1 * (1.0 - p1) * p2 * (1.0 - p2)) ** 0.5
+                prob = torch.tensor(
+                    [
+                        p1 * p2 + self.q * r,  # (same, same)
+                        p1 * (1.0 - p2) - self.q * r,  # (same, diff)
+                        (1.0 - p1) * p2 - self.q * r,  # (diff, same)
+                        (1.0 - p1) * (1.0 - p2) + self.q * r,  # (diff, diff)
+                    ]
                 )
+                class_vector = prob.multinomial(batch_size, replacement=True)
+                if not test:
+                    distractors[0] = torch.where(class_vector < 2, targets[0], distractors[0])
+                    distractors[1] = torch.where(
+                        (class_vector == 0) | (class_vector == 2), targets[1], distractors[1]
+                    )
 
-        # Add noise
+        # --- Add noise (observed) ---
         targets_observed = [self._sample_noise(t, i) for i, t in enumerate(targets)]
-        distractors_observed = [
-            self._sample_noise(d, i) for i, d in enumerate(distractors)
-        ]
+        distractors_observed = [self._sample_noise(d, i) for i, d in enumerate(distractors)]
 
-
-        # Prepare output dictionary
+        # --- Prepare output dictionary ---
         result = {}
         for i in range(self.dim):
             key = "angles" if i == 0 else "colors"
             result[f"target_{key}"] = targets[i].to(self.device)
             result[f"distractor_{key}"] = distractors[i].to(self.device)
             result[f"target_{key}_observed"] = targets_observed[i].to(self.device)
-            result[f"distractor_{key}_observed"] = distractors_observed[i].to(
-                self.device
-            )
+            result[f"distractor_{key}_observed"] = distractors_observed[i].to(self.device)
 
-        ideal_angle_estimates = self._ideal_observer(result)
-        result["ideal_observer_estimates"] = ideal_angle_estimates.to(self.device)
-
+        # --- Ideal observer ---
+        result["ideal_observer_estimates"] = self._ideal_observer(result).to(self.device)
         return result
 
 

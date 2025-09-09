@@ -34,7 +34,7 @@ class Trial:
     def clear_phases(self):
         self.phases = []
 
-    def run_batch(self, model: RNN, batch_size, test=False):
+    def run_batch(self, model: RNN, batch_size, test=False, **datagen_kwargs):
         # derive sizes
         N = getattr(model, "hidden_size", None) or model.init_hidden(1).shape[1]
         n_in = getattr(model, "input_size", None) or self.stimuli.n_inputs
@@ -42,11 +42,19 @@ class Trial:
         # get model device to keep the 0 input on the same device
         device = next(model.parameters()).device
         # initialize
-        batch = self.datagen(batch_size, test)
+        batch = self.datagen(batch_size, test, **datagen_kwargs)
+        # Get true batch size from batch
+        if "target_angles" in batch:
+            true_batch_size = batch["target_angles"].shape[0]
+        elif "target_colors" in batch:
+            true_batch_size = batch["target_colors"].shape[0]
+        else:
+            raise ValueError("Cannot determine batch size from batch dict.")
+
         target_inputs, distractor_inputs = self.stimuli(batch, test)
-        eta_tilde = torch.randn(batch_size, N).to(device)
-        hidden = model.init_hidden(batch_size)
-        empty_inputs = torch.zeros(batch_size, n_in, device=device).float()
+        eta_tilde = torch.randn(true_batch_size, N).to(device)
+        hidden = model.init_hidden(true_batch_size)
+        empty_inputs = torch.zeros(true_batch_size, n_in, device=device).float()
         outputs = []
 
         # go through phases
@@ -60,7 +68,7 @@ class Trial:
 
             for _ in range(phase.steps):
                 eta_tilde = self.eps1 * eta_tilde + self.eps2 * torch.randn(
-                    batch_size, N, device=device
+                    true_batch_size, N, device=device
                 )
                 eta = eta_tilde * self.C
                 if not phase.output:

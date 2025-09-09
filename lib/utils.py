@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 from .save import to_cpu
+from matplotlib.colors import TwoSlopeNorm
 
 
 def circular_distance(angle1, angle2):
@@ -183,14 +184,14 @@ def analyze_test_batch(output):
             device=output["params"].device,
         )
 
-    theta_hat = torch.arctan2(xy[:, 1], xy[:, 0])
+    theta_hat = torch.arctan2(xy[:, 1], xy[:, 0]).cpu()
 
     delta_theta = circular_distance(
         batch["target_angles_observed"], batch["distractor_angles_observed"]
-    )
+    ).cpu()
     delta_ideal = circular_distance(
         batch["target_angles_observed"], batch["ideal_observer_estimates"]
-    )
+    ).cpu()
 
     error_theta = (theta - theta_hat) % (2 * torch.pi)
     error_theta = torch.where(
@@ -304,24 +305,40 @@ def visualize_test_output(test_output, dims=1, fname=None):
         err_np = test_output["error_theta"].numpy()
         ideal_np = test_output["ideal_observer"].numpy()
 
-        vals, xbins, ybins = np.histogram2d(
+        # Weighted sums and counts
+        err_sum, xbins, ybins = np.histogram2d(
             delta_color_np, delta_theta_np, weights=err_np, bins=(40, 40)
         )
-        ideal_vals, xbins, ybins = np.histogram2d(
-            delta_color_np, delta_theta_np, weights=ideal_np, bins=(40, 40)
+        ideal_sum, _, _ = np.histogram2d(
+            delta_color_np, delta_theta_np, weights=ideal_np, bins=(xbins, ybins)
+        )
+        counts, _, _ = np.histogram2d(
+            delta_color_np, delta_theta_np, bins=(xbins, ybins)
         )
 
-        mesh1 = axes[1].pcolormesh(ybins, xbins, vals, cmap="viridis")
+        # Mean signed error per bin (mask empty bins)
+        err_mean = np.divide(err_sum, counts, out=np.full_like(err_sum, np.nan), where=counts > 0)
+        ideal_mean = np.divide(ideal_sum, counts, out=np.full_like(ideal_sum, np.nan), where=counts > 0)
+
+        # Symmetric robust scale centered at 0
+        finite_abs = np.concatenate([
+            np.abs(err_mean[np.isfinite(err_mean)]).ravel(),
+            np.abs(ideal_mean[np.isfinite(ideal_mean)]).ravel(),
+        ])
+        amax = np.percentile(finite_abs, 99) if finite_abs.size else 1.0
+        norm = TwoSlopeNorm(vcenter=0.0, vmin=-amax, vmax=amax)
+
+        mesh1 = axes[1].pcolormesh(ybins, xbins, err_mean, cmap="coolwarm", norm=norm, shading="auto")
         axes[1].set_xlabel("Delta Angle (rad)")
         axes[1].set_ylabel("Delta Color (rad)")
-        axes[1].set_title("Angle Error")
-        fig.colorbar(mesh1, ax=axes[1])
+        axes[1].set_title("Mean Signed Angle Error")
+        fig.colorbar(mesh1, ax=axes[1], label="Radians")
 
-        mesh2 = axes[2].pcolormesh(ybins, xbins, ideal_vals, cmap="viridis")
+        mesh2 = axes[2].pcolormesh(ybins, xbins, ideal_mean, cmap="coolwarm", norm=norm, shading="auto")
         axes[2].set_xlabel("Delta Angle (rad)")
         axes[2].set_ylabel("Delta Color (rad)")
-        axes[2].set_title("Ideal Observer")
-        fig.colorbar(mesh2, ax=axes[2])
+        axes[2].set_title("Mean Signed Ideal Error")
+        fig.colorbar(mesh2, ax=axes[2], label="Radians")
 
     plt.tight_layout()
     if fname is not None:

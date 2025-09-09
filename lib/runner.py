@@ -84,7 +84,7 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
 
     if params.test_batch_size > 0:
         with torch.no_grad():
-            test_batch = trial.run_batch(rnn, params.test_batch_size, True)
+            test_batch = trial.run_batch(rnn, params.test_batch_size, test=True , structured_test=True, n_delta=40, n_base=5)
 
     return {"params": params, "rnn": rnn, "losses": losses, "test_batch": test_batch}
 
