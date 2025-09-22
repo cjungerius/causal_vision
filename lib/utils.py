@@ -175,8 +175,9 @@ def analyze_test_batch(output):
 
     # check if we're working with a batch from an angle or feature network
     if output["params"].output_type == "angle":
-        xy = batch["outputs"]
         xy = batch["outputs"].mean(dim=1)
+    elif output["params"].output_type == "angle_color":
+        xy = batch["outputs"][:,:,:2].mean(dim=1)
     elif output["params"].output_type == "feature":
         xy = decoder(
             batch["outputs"].mean(dim=1),

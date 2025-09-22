@@ -39,7 +39,7 @@ class Trial:
         model: RNN,
         batch_size: int,
         test: bool = False,
-        max_chunk_size: int | None = None,
+        max_chunk_size: int | None = 2000,
         **datagen_kwargs,
     ):
         """

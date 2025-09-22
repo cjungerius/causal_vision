@@ -12,22 +12,6 @@ from .utils import generate_gabor_features
 import numpy as np
 from scipy.special import iv as besselI
 
-# %%
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# %%
-# Load the ConvNeXt model with pretrained weights
-model = convnext_base(weights=ConvNeXt_Base_Weights.DEFAULT)
-model.to(device)
-# Set the model to evaluation mode
-model.eval()
-weights = ConvNeXt_Base_Weights.DEFAULT
-preprocess = weights.transforms()
-model.features = model.features[
-    0:2
-]  # Use only the first two layers for feature extraction
-for param in model.parameters():
-    param.requires_grad = False
-
 
 # %%
 class DataGenerator:
@@ -344,8 +328,8 @@ class StimuliGenerator(ABC):
             batch[f"distractor_{name}{suffix}"] for name in feature_names
         ]
 
-        target_inputs = self.compute_representation(*target_features).to(device)
-        distractor_inputs = self.compute_representation(*distractor_features).to(device)
+        target_inputs = self.compute_representation(*target_features).to(self.device)
+        distractor_inputs = self.compute_representation(*distractor_features).to(self.device)
 
         return (target_inputs, distractor_inputs)
 
@@ -420,63 +404,4 @@ class FeatureStimuliGenerator(StimuliGenerator):
             )
 
 
-# %%
-# %%
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # ==== 1D ring demo (spatial stimuli) ====
-    datgen1d = DataGenerator(dim=1, kappas=8.0, p=0.5, q=0, device=device)
-    stimgen1d = SpatialStimuliGenerator(
-        dim=1, n_a=64, tuning_concentration=3.0, A=1.0, device=device
-    )
 
-    batch1d = datgen1d(batch_size=64)
-    target_1d_train, distractor_1d_train = stimgen1d(
-        batch1d, test=False
-    )  # noisy/observed
-    target_1d_test, _ = stimgen1d(batch1d, test=True)  # clean
-
-    plt.figure(figsize=(6, 3))
-    plt.title("1D target (train) vs. clean (test)")
-    plt.plot(target_1d_train[0].cpu().numpy(), label="train/observed")
-    plt.plot(target_1d_test[0].cpu().numpy(), label="test/clean", alpha=0.7)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-    # ==== 2D grid demo (spatial stimuli) ====
-    n_a_2d = 16  # grid will be n_a x n_a when flattened
-    datgen2d = DataGenerator(
-        dim=2, kappas=(8.0, 1.5), p=[0.5, 0.2], q=0.2, device=device
-    )
-    stimgen2d = SpatialStimuliGenerator(
-        dim=2, n_a=n_a_2d, tuning_concentration=3.0, A=1.0, device=device
-    )
-
-    batch2d = datgen2d(batch_size=32)
-    target_2d_train, _ = stimgen2d(batch2d, test=False)  # shape: [B, n_a*n_a]
-
-    plt.figure(figsize=(4, 4))
-    plt.title("2D target (train), sample 0")
-    plt.imshow(target_2d_train[0].reshape(n_a_2d, n_a_2d).cpu().numpy(), cmap="viridis")
-    plt.colorbar()
-    plt.tight_layout()
-    plt.show()
-
-    # ==== Feature-based demo (ConvNeXt+gabors) ====
-    # Uses your existing model/preprocess defined above.
-    featgen2d = FeatureStimuliGenerator(
-        dim=2, model=model, device=device, preprocess=preprocess
-    )
-
-    small_batch = datgen2d(batch_size=4)
-    with torch.no_grad():
-        feat_target, feat_distr = featgen2d(small_batch, test=False)
-
-    print(
-        "Feature stimuli shapes (target, distractor):",
-        tuple(feat_target.shape),
-        tuple(feat_distr.shape),
-    )
-
-# %%
