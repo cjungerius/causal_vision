@@ -36,7 +36,7 @@ def my_loss_spatial(target, outputs):
 
 
 def criterion(batch, params):
-    if params.input_type == "spatial" or params.output_type == "angle":
+    if params.output_type == "angle":
         target = batch["target_angles"]
         outputs = batch["outputs"]
         return my_loss_spatial(target, outputs)
@@ -172,18 +172,23 @@ def generate_gabor_features(angles, colors, model, device, preprocess) -> torch.
 def analyze_test_batch(output):
     batch = output["test_batch"]
     theta = batch["target_angles"].cpu()
+    color_hat = None
 
     # check if we're working with a batch from an angle or feature network
     if output["params"].output_type == "angle":
         xy = batch["outputs"].mean(dim=1)
     elif output["params"].output_type == "angle_color":
-        xy = batch["outputs"][:,:,:2].mean(dim=1)
+        xy = batch["outputs"].mean(dim=1)
     elif output["params"].output_type == "feature":
         xy = decoder(
             batch["outputs"].mean(dim=1),
             use_nn_decoder=True,
             device=output["params"].device,
+            dims=output["params"].dims
         )
+
+    if output["params"].output_type == "angle_color" or (output["params"].output_type == "feature" and output["params"].dims == 2):
+        color_hat = torch.arctan2(xy[:, 3], xy[:, 2]).cpu()
 
     theta_hat = torch.arctan2(xy[:, 1], xy[:, 0]).cpu()
 
@@ -204,6 +209,13 @@ def analyze_test_batch(output):
             batch["target_colors_observed"], batch["distractor_colors_observed"]
         )
 
+        if color_hat is not None:
+            color = batch["target_colors"].cpu()
+            error_color = (color - color_hat) % (2 * torch.pi)
+            error_color = torch.where(
+                error_color >= torch.pi, error_color - 2 * torch.pi, error_color
+            )
+
     test_output = {
         "theta": theta,
         "theta_hat": theta_hat,
@@ -214,10 +226,15 @@ def analyze_test_batch(output):
     if output["params"].dims == 2:
         test_output["delta_color"] = delta_color
 
+        if color_hat is not None:
+            test_output["color"] = color
+            test_output["color_hat"] = color_hat
+            test_output["error_color"] = error_color
+
     return test_output
 
 
-def decoder(features, use_nn_decoder=False, device="cpu"):
+def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
     class MyModel(nn.Module):
         def __init__(self, input_size, N, output_size):
             super().__init__()
@@ -230,22 +247,41 @@ def decoder(features, use_nn_decoder=False, device="cpu"):
             x = F.relu(self.fc2(x))
             x = self.fc3(x)
             return x
+        
+    if dims == 1:
 
-    nn_decoder = MyModel(128, 100, 2)
-    nn_decoder.to(device)
+        nn_decoder = MyModel(128, 100, 2)
+        nn_decoder.to(device)
 
-    try:
-        nn_decoder.load_state_dict(
-            torch.load("decoders/vector_angle_decoder_nn.pth", map_location=device)
-        )
-    except FileNotFoundError:
-        print(
-            "No saved NN decoder parameters found. Starting with random initialization."
-        )
+        try:
+            nn_decoder.load_state_dict(
+                torch.load("decoders/vector_angle_decoder_nn.pth", map_location=device)
+            )
+        except FileNotFoundError:
+            print(
+                "No saved NN decoder parameters found. Starting with random initialization."
+            )
 
-    # load SVM decoder from pickle:
-    with open("decoders/vector_angle_decoder_svm.pkl", "rb") as f:
-        svm_decoder = pickle.load(f)
+        # load SVM decoder from pickle:
+        with open("decoders/vector_angle_decoder_svm.pkl", "rb") as f:
+            svm_decoder = pickle.load(f)
+    
+    elif dims == 2:
+        nn_decoder = MyModel(128, 100, 4)
+        nn_decoder.to(device)
+
+        try:
+            nn_decoder.load_state_dict(
+                torch.load("decoders/vector_angle_color_decoder_nn.pth", map_location=device)
+            )
+        except FileNotFoundError:
+            print(
+                "No saved NN decoder parameters found. Starting with random initialization."
+            )
+
+        # load SVM decoder from pickle:
+        with open("decoders/vector_angle_color_decoder_svm.pkl", "rb") as f:
+            svm_decoder = pickle.load(f)
 
     if not use_nn_decoder:
         prediction = svm_decoder.predict(features.cpu())
@@ -258,6 +294,8 @@ def decoder(features, use_nn_decoder=False, device="cpu"):
 def visualize_test_output(test_output, dims=1, fname=None):
     if dims == 1:
         fig, axes = plt.subplots(2, figsize=(10, 12))
+    elif 'color_hat' in test_output:
+        fig, axes = plt.subplots(5, figsize=(10,12))
     else:
         fig, axes = plt.subplots(3, figsize=(10, 12))
 
@@ -340,6 +378,42 @@ def visualize_test_output(test_output, dims=1, fname=None):
         axes[2].set_ylabel("Delta Color (rad)")
         axes[2].set_title("Mean Signed Ideal Error")
         fig.colorbar(mesh2, ax=axes[2], label="Radians")
+
+        if 'color_hat' in test_output:
+            color_np = test_output["color"].numpy()
+            color_hat_np = (test_output["color_hat"] % (2 * torch.pi)).numpy()
+
+            axes[3].scatter(color_np, color_hat_np, alpha=0.5)
+            axes[3].set_xlabel("True Color (rad)")
+            axes[3].set_ylabel("Predicted Color (rad)")
+            axes[3].set_title("Color Prediction")
+            axes[3].axis("equal")
+
+            err_c_np = test_output["error_color"].numpy()
+
+            # Weighted sums and counts
+            c_err_sum, xbins, ybins = np.histogram2d(
+                delta_theta_np, delta_color_np, weights=err_c_np, bins=(40, 40)
+            )
+
+            c_counts, _, _ = np.histogram2d(
+                delta_theta_np, delta_color_np, bins=(xbins, ybins)
+            )
+
+            # Mean signed error per bin (mask empty bins)
+            c_err_mean = np.divide(c_err_sum, c_counts, out=np.full_like(c_err_sum, np.nan), where=c_counts > 0)
+
+            # Symmetric robust scale centered at 0
+            c_finite_abs = np.abs(c_err_mean[np.isfinite(c_err_mean)]).ravel()
+
+            c_amax = np.percentile(c_finite_abs, 99) if c_finite_abs.size else 1.0
+            c_norm = TwoSlopeNorm(vcenter=0.0, vmin=-c_amax, vmax=c_amax)
+
+            c_mesh1 = axes[4].pcolormesh(ybins, xbins, c_err_mean, cmap="coolwarm", norm=c_norm, shading="auto")
+            axes[4].set_xlabel("Delta Color (rad)")
+            axes[4].set_ylabel("Delta Angle (rad)")
+            axes[4].set_title("Mean Signed Color Error")
+            fig.colorbar(mesh1, ax=axes[4], label="Radians")
 
     plt.tight_layout()
     if fname is not None:
