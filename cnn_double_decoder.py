@@ -133,7 +133,7 @@ my_model.to(device)
 # Train the model for a few epochs
 optimizer = torch.optim.Adam(my_model.parameters(), lr=0.001)
 batch_size = 50
-num_batches = 400
+num_batches = 2000
 model_losses = []
 
 
@@ -227,7 +227,7 @@ color_hat_svm = np.arctan2(prediction[:, 3], prediction[:, 2]) % (2 * np.pi)  # 
 model_output = my_model(X_test).detach().cpu()
 angle_hat_nn = torch.arctan2(model_output[:, 1], model_output[:, 0]) % (2 * torch.pi)
 color_hat_nn = torch.arctan2(model_output[:, 3], model_output[:, 2]) % (2 * torch.pi)
-_, ax = plt.subplots(1, 2, figsize=(4, 3))
+_, ax = plt.subplots(1, 2, figsize=(6, 5))
 
 ax[0].scatter(y_test[:, 0], angle_hat_svm, alpha=0.3)
 ax[0].scatter(y_test[:, 0], angle_hat_nn, alpha=0.3, c="orange")
@@ -237,6 +237,7 @@ ax[1].scatter(y_test[:, 1], color_hat_svm, alpha=0.3)
 ax[1].scatter(y_test[:, 1], color_hat_nn, alpha=0.3, c="orange")
 ax[1].set(ylabel="Predicted color", xlabel="Test color")
 
+plt.tight_layout()
 plt.savefig("svm_nn_comparison.png")
 
 # %%
