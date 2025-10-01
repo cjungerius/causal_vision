@@ -267,7 +267,7 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
             svm_decoder = pickle.load(f)
     
     elif dims == 2:
-        nn_decoder = MyModel(128, 100, 4)
+        nn_decoder = MyModel(3136, 500, 4)
         nn_decoder.to(device)
 
         try:

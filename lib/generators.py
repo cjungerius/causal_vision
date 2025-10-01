@@ -391,7 +391,7 @@ class FeatureStimuliGenerator(StimuliGenerator):
 
     @property
     def n_inputs(self) -> int:
-        return [p.size() for p in self.model.features.parameters()][-1][0]
+        return 3136 
 
     def compute_representation(self, *features):
         if self.dim == 1:
