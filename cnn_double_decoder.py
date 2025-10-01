@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import numpy as np
-from torchvision.models import convnext_base, ConvNeXt_Base_Weights
+from torchvision.models import vgg19, VGG19_Weights
 from sklearn import svm
 from sklearn.multioutput import MultiOutputRegressor
 import warnings
@@ -17,10 +17,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # %%
 # Load the ConvNeXt model with pretrained weights
-model = convnext_base(weights=ConvNeXt_Base_Weights.DEFAULT)
+model = vgg19(weights=VGG19_Weights.DEFAULT)
 # Set the model to evaluation mode
 model.eval()
-weights = ConvNeXt_Base_Weights.DEFAULT
+weights = VGG19_Weights.DEFAULT
 preprocess = weights.transforms()
 model.features = model.features[
     0:2
@@ -126,7 +126,7 @@ class MyModel(nn.Module):
 
 
 # %%
-my_model = MyModel(128, 100, 4)
+my_model = MyModel(3136, 500, 4)
 my_model.to(device)
 
 # %%
@@ -242,7 +242,7 @@ plt.savefig("svm_nn_comparison.png")
 
 # %%
 # save SVM and NN decoders
-torch.save(my_model.state_dict(), "vector_angle_color_decoder_nn.pth")
+torch.save(my_model.state_dict(), "vector_angle_color_decoder_nn_big.pth")
 
 with open("vector_angle_color_decoder_svm.pkl", "wb") as f:
     pickle.dump(regressor, f)
