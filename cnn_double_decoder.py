@@ -75,7 +75,7 @@ def generate_batch(batch_size):
         # Generate Gabor patches
         gabors = torch.stack(
             [
-                gabor(232, sigma=0.4, theta=angle / 2, Lambda=0.25, psi=0, gamma=1)
+                gabor(232, sigma=0.8, theta=angle / 2, Lambda=0.1, psi=0, gamma=1)
                 for angle in angles
             ]
         )
@@ -190,15 +190,11 @@ plt.close("all")
 print("\nTraining completed! Final losses:")
 print(f"Model Loss: {model_losses[-1]:.4f}")
 
-# %%
-# save SVM and NN decoders
-torch.save(my_model.state_dict(), "vector_angle_color_decoder_nn_big.pth")
-
-
-# X_train, y_train = generate_batch(400)
+# # %%
+# X_train, y_train = generate_batch(2000)
 # X_test, y_test = generate_batch(100)
-# 
-# %%
+
+# # %%
 # y_train_multi = np.array(
 #     [
 #         np.cos(y_train[:, 0].cpu()),
@@ -215,34 +211,36 @@ torch.save(my_model.state_dict(), "vector_angle_color_decoder_nn_big.pth")
 #         np.sin(y_test[:, 1].cpu()),
 #     ]
 # ).T
-# 
+
 # regressor = MultiOutputRegressor(svm.SVR(kernel="rbf", C=1e3, gamma=0.1))
-# 
+
 # regressor.fit(X_train.cpu(), y_train_multi)
-# 
-# with open("vector_angle_color_decoder_big_svm.pkl", "wb") as f:
-#     pickle.dump(regressor, f)
-# 
 # prediction = regressor.predict(X_test.cpu())
-# 
+
 # angle_hat_svm = np.arctan2(prediction[:, 1], prediction[:, 0]) % (2 * np.pi)  # type: ignore
 # color_hat_svm = np.arctan2(prediction[:, 3], prediction[:, 2]) % (2 * np.pi)  # type: ignore
-# 
+
+# # %%
+# # comparing SVM and NN approach:
+
+# model_output = my_model(X_test).detach().cpu()
+# angle_hat_nn = torch.arctan2(model_output[:, 1], model_output[:, 0]) % (2 * torch.pi)
+# color_hat_nn = torch.arctan2(model_output[:, 3], model_output[:, 2]) % (2 * torch.pi)
+# _, ax = plt.subplots(1, 2, figsize=(4, 3))
+
+# ax[0].scatter(y_test[:, 0], angle_hat_svm, alpha=0.3)
+# ax[0].scatter(y_test[:, 0], angle_hat_nn, alpha=0.3, c="orange")
+# ax[0].set(ylabel="Predicted angle", xlabel="Test angle")
+
+# ax[1].scatter(y_test[:, 1], color_hat_svm, alpha=0.3)
+# ax[1].scatter(y_test[:, 1], color_hat_nn, alpha=0.3, c="orange")
+# ax[1].set(ylabel="Predicted color", xlabel="Test color")
+
+# plt.savefig("svm_nn_comparison.png")
+
 # %%
-# comparing SVM and NN approach:
-#
-#model_output = my_model(X_test).detach().cpu()
-#angle_hat_nn = torch.arctan2(model_output[:, 1], model_output[:, 0]) % (2 * torch.pi)
-#color_hat_nn = torch.arctan2(model_output[:, 3], model_output[:, 2]) % (2 * torch.pi)
-#_, ax = plt.subplots(1, 2, figsize=(6, 5))
-#
-#ax[0].scatter(y_test[:, 0], angle_hat_svm, alpha=0.3)
-#ax[0].scatter(y_test[:, 0], angle_hat_nn, alpha=0.3, c="orange")
-#ax[0].set(ylabel="Predicted angle", xlabel="Test angle")
-#
-#ax[1].scatter(y_test[:, 1], color_hat_svm, alpha=0.3)
-#ax[1].scatter(y_test[:, 1], color_hat_nn, alpha=0.3, c="orange")
-#ax[1].set(ylabel="Predicted color", xlabel="Test color")
-#
-#plt.tight_layout()
-#plt.savefig("svm_nn_comparison.png")
+# save SVM and NN decoders
+torch.save(my_model.state_dict(), "vector_angle_color_decoder_nn_big_newgabor.pth")
+
+# with open("vector_angle_color_decoder_svm.pkl", "wb") as f:
+#     pickle.dump(regressor, f)
