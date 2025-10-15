@@ -272,7 +272,7 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
 
         try:
             nn_decoder.load_state_dict(
-                torch.load("decoders/vector_angle_color_decoder_nn.pth", map_location=device)
+                torch.load("decoders/vector_angle_color_decoder_nn_big.pth", map_location=device)
             )
         except FileNotFoundError:
             print(
@@ -286,7 +286,7 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
     if not use_nn_decoder:
         prediction = svm_decoder.predict(features.cpu())
     else:
-        prediction = nn_decoder(features).detach().cpu()
+        prediction = nn_decoder(features.to(device)).detach().cpu()
 
     return prediction
 

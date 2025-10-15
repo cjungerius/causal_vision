@@ -214,6 +214,6 @@ def add_test_batch(
     test_trial.add_phase("resp", 0.1, "blank", True)
 
     with torch.inference_mode():
-        test_batch = test_trial.run_batch(rnn, test_batch_size, True)
+        test_batch = test_trial.run_batch(rnn, test_batch_size, True, structured_test=True)
 
     return test_batch
