@@ -142,7 +142,9 @@ class DataGenerator:
             p_shared = self.compute_p_shared(
                 first_np[i], second_np[i], kappa_tilde, p_prior
             )
-            mu_shared = self.compute_circular_mean(first_np[i], second_np[i]) % (2 * np.pi)
+            mu_shared = self.compute_circular_mean(first_np[i], second_np[i]) % (
+                2 * np.pi
+            )
 
             delta_x = abs(first_np[i] - second_np[i])
             if delta_x > np.pi:
@@ -154,7 +156,9 @@ class DataGenerator:
             )
             estimates.append(float(est % (2 * np.pi)))
 
-        return torch.tensor(estimates, dtype=first_inputs.dtype, device=first_inputs.device)
+        return torch.tensor(
+            estimates, dtype=first_inputs.dtype, device=first_inputs.device
+        )
 
     def compute_ideal_observer_estimates_2d(
         self, target_angles, target_colors, distractor_angles, distractor_colors
@@ -189,14 +193,13 @@ class DataGenerator:
         c3 = np.log(prob[2]) + np.log(colors_lik_shared) - 2 * log_2pi
         c4 = np.log(prob[3]) - 4 * log_2pi.repeat(c1.size)
 
-
-        logc = np.stack([c1, c2, c3, c4], axis=0)              # (4, B)
-        m = np.max(logc, axis=0, keepdims=True)                # stabilize per-sample
+        logc = np.stack([c1, c2, c3, c4], axis=0)  # (4, B)
+        m = np.max(logc, axis=0, keepdims=True)  # stabilize per-sample
         post = np.exp(logc - m)
-        post /= np.sum(post, axis=0, keepdims=True)            # normalize per-sample
+        post /= np.sum(post, axis=0, keepdims=True)  # normalize per-sample
 
         # Posterior that the angle dimension is "shared"
-        p_shared_angle = post[0] + post[1]                     # (B,)
+        p_shared_angle = post[0] + post[1]  # (B,)
 
         # Shared-component params for angle
         delta_x = np.abs(ta - da)
@@ -211,7 +214,9 @@ class DataGenerator:
             )
             estimates.append(float(est % (2 * np.pi)))
 
-        return torch.tensor(estimates, dtype=target_angles.dtype, device=target_angles.device)
+        return torch.tensor(
+            estimates, dtype=target_angles.dtype, device=target_angles.device
+        )
 
     def _ideal_observer(self, batch):
         if self.dim == 1:
@@ -230,7 +235,14 @@ class DataGenerator:
             )
         return estimates
 
-    def __call__(self, batch_size: int = None, test=False, structured_test=False, n_delta=20, n_base=8):
+    def __call__(
+        self,
+        batch_size: int = None,
+        test=False,
+        structured_test=False,
+        n_delta=20,
+        n_base=8,
+    ):
         """
         Generates a batch of data. If structured_test is True, generates a grid of all combinations
         of delta and base angles/colors. Otherwise, samples randomly.
@@ -252,7 +264,9 @@ class DataGenerator:
                 delta_colors = torch.linspace(-torch.pi, torch.pi, n_delta)
                 base_angles = torch.linspace(0, 2 * torch.pi, n_base)
                 base_colors = torch.linspace(0, 2 * torch.pi, n_base)
-                grid = torch.cartesian_prod(base_angles, base_colors, delta_angles, delta_colors)
+                grid = torch.cartesian_prod(
+                    base_angles, base_colors, delta_angles, delta_colors
+                )
                 target_angles = grid[:, 0]
                 target_colors = grid[:, 1]
                 distractor_angles = (target_angles + grid[:, 2]) % (2 * torch.pi)
@@ -283,14 +297,24 @@ class DataGenerator:
                 )
                 class_vector = prob.multinomial(batch_size, replacement=True)
                 if not test:
-                    distractors[0] = torch.where(class_vector < 2, targets[0], distractors[0])
+                    distractors[0] = torch.where(
+                        class_vector < 2, targets[0], distractors[0]
+                    )
                     distractors[1] = torch.where(
-                        (class_vector == 0) | (class_vector == 2), targets[1], distractors[1]
+                        (class_vector == 0) | (class_vector == 2),
+                        targets[1],
+                        distractors[1],
                     )
 
         # --- Add noise (observed) ---
-        targets_observed = [self._sample_noise(t, i) for i, t in enumerate(targets)]
-        distractors_observed = [self._sample_noise(d, i) for i, d in enumerate(distractors)]
+        if not test:
+            targets_observed = [self._sample_noise(t, i) for i, t in enumerate(targets)]
+            distractors_observed = [
+                self._sample_noise(d, i) for i, d in enumerate(distractors)
+            ]
+        else:
+            targets_observed = targets
+            distractors_observed = distractors
 
         # --- Prepare output dictionary ---
         result = {}
@@ -299,10 +323,14 @@ class DataGenerator:
             result[f"target_{key}"] = targets[i].to(self.device)
             result[f"distractor_{key}"] = distractors[i].to(self.device)
             result[f"target_{key}_observed"] = targets_observed[i].to(self.device)
-            result[f"distractor_{key}_observed"] = distractors_observed[i].to(self.device)
+            result[f"distractor_{key}_observed"] = distractors_observed[i].to(
+                self.device
+            )
 
         # --- Ideal observer ---
-        result["ideal_observer_estimates"] = self._ideal_observer(result).to(self.device)
+        result["ideal_observer_estimates"] = self._ideal_observer(result).to(
+            self.device
+        )
         return result
 
 
@@ -329,7 +357,9 @@ class StimuliGenerator(ABC):
         ]
 
         target_inputs = self.compute_representation(*target_features).to(self.device)
-        distractor_inputs = self.compute_representation(*distractor_features).to(self.device)
+        distractor_inputs = self.compute_representation(*distractor_features).to(
+            self.device
+        )
 
         return (target_inputs, distractor_inputs)
 
@@ -391,7 +421,7 @@ class FeatureStimuliGenerator(StimuliGenerator):
 
     @property
     def n_inputs(self) -> int:
-        return 3136 
+        return 3136
 
     def compute_representation(self, *features):
         if self.dim == 1:
@@ -402,6 +432,3 @@ class FeatureStimuliGenerator(StimuliGenerator):
             return generate_gabor_features(
                 features[0], features[1], self.model, self.device, self.preprocess
             )
-
-
-
