@@ -267,12 +267,12 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
             svm_decoder = pickle.load(f)
     
     elif dims == 2:
-        nn_decoder = MyModel(3136, 500, 4)
+        nn_decoder = MyModel(128, 100, 4)
         nn_decoder.to(device)
 
         try:
             nn_decoder.load_state_dict(
-                torch.load("decoders/vector_angle_color_decoder_nn_big.pth", map_location=device)
+                torch.load("decoders/vector_angle_color_decoder_nn.pth", map_location=device)
             )
         except FileNotFoundError:
             print(
