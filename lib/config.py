@@ -1,7 +1,7 @@
 import torch
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Callable
-from torchvision.models import vgg19, VGG19_Weights
+from torchvision.models import convnext_base, ConvNeXt_Base_Weights
 
 
 @dataclass
@@ -51,8 +51,8 @@ class ExperimentParams:
 
         # Only set up the CNN if using feature inputs
         if self.input_type == "feature":
-            weights = VGG19_Weights.DEFAULT
-            model = vgg19(weights=weights)
+            weights = ConvNeXt_Base_Weights.DEFAULT
+            model = convnext_base(weights=weights)
             model.to(self.device)
             model.eval()
             # Use only first two layers for feature extraction
