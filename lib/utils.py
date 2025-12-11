@@ -35,6 +35,17 @@ def my_loss_spatial(target, outputs):
     return (x_errors + y_errors).mean()
 
 
+def my_loss_decoded(target, outputs):
+    target_x = torch.cos(target).unsqueeze(-1)
+    target_y = torch.sin(target).unsqueeze(-1)
+    output_x = outputs[:, 0]
+    output_y = outputs[:, 1]
+
+    x_errors = (output_x - target_x) ** 2
+    y_errors = (output_y - target_y) ** 2
+    return (x_errors + y_errors).mean()
+
+
 def criterion(batch, params):
     if params.output_type == "angle":
         target = batch["target_angles"]
@@ -50,7 +61,7 @@ def criterion(batch, params):
         loss_2 = my_loss_spatial(target_2, outputs_2)
         return loss_1 + loss_2
 
-    else:
+    elif params.output_type == "feature":
         target = generate_gabor_features(
             batch["target_angles"],
             batch.get("target_colors", None),
@@ -60,6 +71,21 @@ def criterion(batch, params):
         )
         outputs = batch["outputs"]
         return my_loss_feature(target, outputs)
+
+    elif params.output_type == "feature_decode":
+        outputs = decoder(
+            batch["outputs"].mean(dim=1),
+            use_nn_decoder=True,
+            device=params.device,
+            dims=params.dims,
+            need_grad=True,
+        )
+        target = batch["target_angles"]
+        loss = my_loss_decoded(target, outputs[:, :2])
+        if params.dims == 2:
+            target = batch["target_colors"]
+            loss += my_loss_decoded(target, outputs[:, 2:])
+        return loss
 
 
 def _make_gabors(
@@ -179,15 +205,25 @@ def analyze_test_batch(output):
         xy = batch["outputs"].mean(dim=1)
     elif output["params"].output_type == "angle_color":
         xy = batch["outputs"].mean(dim=1)
-    elif output["params"].output_type == "feature":
+    elif (
+        output["params"].output_type == "feature"
+        or output["params"].output_type == "feature_decode"
+    ):
         xy = decoder(
             batch["outputs"].mean(dim=1),
             use_nn_decoder=True,
             device=output["params"].device,
-            dims=output["params"].dims
+            dims=output["params"].dims,
         )
 
-    if output["params"].output_type == "angle_color" or (output["params"].output_type == "feature" and output["params"].dims == 2):
+    if (
+        output["params"].output_type == "angle_color"
+        or (output["params"].output_type == "feature" and output["params"].dims == 2)
+        or (
+            output["params"].output_type == "feature_decode"
+            and output["params"].dims == 2
+        )
+    ):
         color_hat = torch.arctan2(xy[:, 3], xy[:, 2]).cpu()
 
     theta_hat = torch.arctan2(xy[:, 1], xy[:, 0]).cpu()
@@ -234,7 +270,7 @@ def analyze_test_batch(output):
     return test_output
 
 
-def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
+def decoder(features, use_nn_decoder=False, device="cpu", dims=1, need_grad=False):
     class MyModel(nn.Module):
         def __init__(self, input_size, N, output_size):
             super().__init__()
@@ -247,9 +283,8 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
             x = F.relu(self.fc2(x))
             x = self.fc3(x)
             return x
-        
-    if dims == 1:
 
+    if dims == 1:
         nn_decoder = MyModel(128, 100, 2)
         nn_decoder.to(device)
 
@@ -263,16 +298,19 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
             )
 
         # load SVM decoder from pickle:
-        with open("decoders/vector_angle_decoder_svm.pkl", "rb") as f:
-            svm_decoder = pickle.load(f)
-    
+        if not use_nn_decoder:
+            with open("decoders/vector_angle_decoder_svm.pkl", "rb") as f:
+                svm_decoder = pickle.load(f)
+
     elif dims == 2:
         nn_decoder = MyModel(128, 100, 4)
         nn_decoder.to(device)
 
         try:
             nn_decoder.load_state_dict(
-                torch.load("decoders/vector_angle_color_decoder_nn.pth", map_location=device)
+                torch.load(
+                    "decoders/vector_angle_color_decoder_nn.pth", map_location=device
+                )
             )
         except FileNotFoundError:
             print(
@@ -280,13 +318,17 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
             )
 
         # load SVM decoder from pickle:
-        with open("decoders/vector_angle_color_decoder_svm.pkl", "rb") as f:
-            svm_decoder = pickle.load(f)
+        if not use_nn_decoder:
+            with open("decoders/vector_angle_color_decoder_svm.pkl", "rb") as f:
+                svm_decoder = pickle.load(f)
 
     if not use_nn_decoder:
         prediction = svm_decoder.predict(features.cpu())
     else:
-        prediction = nn_decoder(features.to(device)).detach().cpu()
+        if need_grad:
+            prediction = nn_decoder(features.to(device))
+        else:
+            prediction = nn_decoder(features.to(device)).detach().cpu()
 
     return prediction
 
@@ -294,8 +336,8 @@ def decoder(features, use_nn_decoder=False, device="cpu", dims=1):
 def visualize_test_output(test_output, dims=1, fname=None):
     if dims == 1:
         fig, axes = plt.subplots(2, figsize=(10, 12))
-    elif 'color_hat' in test_output:
-        fig, axes = plt.subplots(5, figsize=(10,12))
+    elif "color_hat" in test_output:
+        fig, axes = plt.subplots(5, figsize=(10, 12))
     else:
         fig, axes = plt.subplots(3, figsize=(10, 12))
 
@@ -356,30 +398,40 @@ def visualize_test_output(test_output, dims=1, fname=None):
         )
 
         # Mean signed error per bin (mask empty bins)
-        err_mean = np.divide(err_sum, counts, out=np.full_like(err_sum, np.nan), where=counts > 0)
-        ideal_mean = np.divide(ideal_sum, counts, out=np.full_like(ideal_sum, np.nan), where=counts > 0)
+        err_mean = np.divide(
+            err_sum, counts, out=np.full_like(err_sum, np.nan), where=counts > 0
+        )
+        ideal_mean = np.divide(
+            ideal_sum, counts, out=np.full_like(ideal_sum, np.nan), where=counts > 0
+        )
 
         # Symmetric robust scale centered at 0
-        finite_abs = np.concatenate([
-            np.abs(err_mean[np.isfinite(err_mean)]).ravel(),
-            np.abs(ideal_mean[np.isfinite(ideal_mean)]).ravel(),
-        ])
+        finite_abs = np.concatenate(
+            [
+                np.abs(err_mean[np.isfinite(err_mean)]).ravel(),
+                np.abs(ideal_mean[np.isfinite(ideal_mean)]).ravel(),
+            ]
+        )
         amax = np.percentile(finite_abs, 99) if finite_abs.size else 1.0
         norm = TwoSlopeNorm(vcenter=0.0, vmin=-amax, vmax=amax)
 
-        mesh1 = axes[1].pcolormesh(ybins, xbins, err_mean, cmap="coolwarm", norm=norm, shading="auto")
+        mesh1 = axes[1].pcolormesh(
+            ybins, xbins, err_mean, cmap="coolwarm", norm=norm, shading="auto"
+        )
         axes[1].set_xlabel("Delta Angle (rad)")
         axes[1].set_ylabel("Delta Color (rad)")
         axes[1].set_title("Mean Signed Angle Error")
         fig.colorbar(mesh1, ax=axes[1], label="Radians")
 
-        mesh2 = axes[2].pcolormesh(ybins, xbins, ideal_mean, cmap="coolwarm", norm=norm, shading="auto")
+        mesh2 = axes[2].pcolormesh(
+            ybins, xbins, ideal_mean, cmap="coolwarm", norm=norm, shading="auto"
+        )
         axes[2].set_xlabel("Delta Angle (rad)")
         axes[2].set_ylabel("Delta Color (rad)")
         axes[2].set_title("Mean Signed Ideal Error")
         fig.colorbar(mesh2, ax=axes[2], label="Radians")
 
-        if 'color_hat' in test_output:
+        if "color_hat" in test_output:
             color_np = test_output["color"].numpy()
             color_hat_np = (test_output["color_hat"] % (2 * torch.pi)).numpy()
 
@@ -401,7 +453,12 @@ def visualize_test_output(test_output, dims=1, fname=None):
             )
 
             # Mean signed error per bin (mask empty bins)
-            c_err_mean = np.divide(c_err_sum, c_counts, out=np.full_like(c_err_sum, np.nan), where=c_counts > 0)
+            c_err_mean = np.divide(
+                c_err_sum,
+                c_counts,
+                out=np.full_like(c_err_sum, np.nan),
+                where=c_counts > 0,
+            )
 
             # Symmetric robust scale centered at 0
             c_finite_abs = np.abs(c_err_mean[np.isfinite(c_err_mean)]).ravel()
@@ -409,7 +466,9 @@ def visualize_test_output(test_output, dims=1, fname=None):
             c_amax = np.percentile(c_finite_abs, 99) if c_finite_abs.size else 1.0
             c_norm = TwoSlopeNorm(vcenter=0.0, vmin=-c_amax, vmax=c_amax)
 
-            c_mesh1 = axes[4].pcolormesh(ybins, xbins, c_err_mean, cmap="coolwarm", norm=c_norm, shading="auto")
+            c_mesh1 = axes[4].pcolormesh(
+                ybins, xbins, c_err_mean, cmap="coolwarm", norm=c_norm, shading="auto"
+            )
             axes[4].set_xlabel("Delta Color (rad)")
             axes[4].set_ylabel("Delta Angle (rad)")
             axes[4].set_title("Mean Signed Color Error")

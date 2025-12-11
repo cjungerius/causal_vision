@@ -13,4 +13,3 @@ if __name__ == "__main__":
         save_cnn_features=args.save_cnn_features,
         tag=args.tag,
     )
-

@@ -24,42 +24,127 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(description="Run causal_vision experiment")
     # Core task setup
-    parser.add_argument("--dims", type=int, default=dc_defaults["dims"], help="(default: %(default)s)")
-    parser.add_argument("--input-type", choices=["spatial", "feature"], default=dc_defaults["input_type"], help="(default: %(default)s)")
-    parser.add_argument("--input-size", type=int, default=dc_defaults["input_size"], help="(default: %(default)s)")
+    parser.add_argument(
+        "--dims", type=int, default=dc_defaults["dims"], help="(default: %(default)s)"
+    )
+    parser.add_argument(
+        "--input-type",
+        choices=["spatial", "feature"],
+        default=dc_defaults["input_type"],
+        help="(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--input-size",
+        type=int,
+        default=dc_defaults["input_size"],
+        help="(default: %(default)s)",
+    )
     # Represent list defaults as comma-separated strings
-    parser.add_argument("--p", type=str, default=",".join(map(str, dc_defaults["p"])), help="Comma-separated list of p values, e.g. '0.4' or '0.4,0.6' (default: %(default)s)")
-    parser.add_argument("--q", type=float, default=dc_defaults["q"], help="(default: %(default)s)")
-    parser.add_argument("--kappas", type=str, default=",".join(map(str, dc_defaults["kappas"])), help="Comma-separated list of kappas, e.g. '7.0' or '7.0,8.0' (default: %(default)s)")
+    parser.add_argument(
+        "--p",
+        type=str,
+        default=",".join(map(str, dc_defaults["p"])),
+        help="Comma-separated list of p values, e.g. '0.4' or '0.4,0.6' (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--q", type=float, default=dc_defaults["q"], help="(default: %(default)s)"
+    )
+    parser.add_argument(
+        "--kappas",
+        type=str,
+        default=",".join(map(str, dc_defaults["kappas"])),
+        help="Comma-separated list of kappas, e.g. '7.0' or '7.0,8.0' (default: %(default)s)",
+    )
 
     # Model architecture
-    parser.add_argument("--hidden-size", type=int, default=dc_defaults["hidden_size"], help="(default: %(default)s)")
-    parser.add_argument("--output-type", choices=["angle", "feature", "angle_color"], default=dc_defaults["output_type"], help="(default: %(default)s)")
+    parser.add_argument(
+        "--hidden-size",
+        type=int,
+        default=dc_defaults["hidden_size"],
+        help="(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--output-type",
+        choices=["angle", "feature", "angle_color", "feature_decode"],
+        default=dc_defaults["output_type"],
+        help="(default: %(default)s)",
+    )
 
     # Stimulus tuning
-    parser.add_argument("--tuning-concentration", type=float, default=dc_defaults["tuning_concentration"], help="(default: %(default)s)")
-    parser.add_argument("--A", type=float, default=dc_defaults["A"], help="(default: %(default)s)")
+    parser.add_argument(
+        "--tuning-concentration",
+        type=float,
+        default=dc_defaults["tuning_concentration"],
+        help="(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--A", type=float, default=dc_defaults["A"], help="(default: %(default)s)"
+    )
 
     # RNN dynamics
-    parser.add_argument("--dt", type=float, default=dc_defaults["dt"], help="(default: %(default)s)")
-    parser.add_argument("--tau", type=float, default=dc_defaults["tau"], help="(default: %(default)s)")
-    parser.add_argument("--eps1", type=float, default=dc_defaults["eps1"], help="(default: %(default)s)")
-    parser.add_argument("--C", type=float, default=dc_defaults["C"], help="(default: %(default)s)")
+    parser.add_argument(
+        "--dt", type=float, default=dc_defaults["dt"], help="(default: %(default)s)"
+    )
+    parser.add_argument(
+        "--tau", type=float, default=dc_defaults["tau"], help="(default: %(default)s)"
+    )
+    parser.add_argument(
+        "--eps1", type=float, default=dc_defaults["eps1"], help="(default: %(default)s)"
+    )
+    parser.add_argument(
+        "--C", type=float, default=dc_defaults["C"], help="(default: %(default)s)"
+    )
 
     # Training
-    parser.add_argument("--lr", type=float, default=dc_defaults["lr"], help="(default: %(default)s)")
-    parser.add_argument("--batch-size", type=int, default=dc_defaults["batch_size"], help="(default: %(default)s)")
-    parser.add_argument("--num-batches", type=int, default=dc_defaults["num_batches"], help="(default: %(default)s)")
-    parser.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=dc_defaults["interactive"], help="(default: %(default)s)")
+    parser.add_argument(
+        "--lr", type=float, default=dc_defaults["lr"], help="(default: %(default)s)"
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=dc_defaults["batch_size"],
+        help="(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--num-batches",
+        type=int,
+        default=dc_defaults["num_batches"],
+        help="(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--interactive",
+        action=argparse.BooleanOptionalAction,
+        default=dc_defaults["interactive"],
+        help="(default: %(default)s)",
+    )
 
     # Testing
-    parser.add_argument("--test-batch-size", type=int, default=dc_defaults["test_batch_size"], help="(default: %(default)s)")
+    parser.add_argument(
+        "--test-batch-size",
+        type=int,
+        default=dc_defaults["test_batch_size"],
+        help="(default: %(default)s)",
+    )
 
     # Output paths and saving toggles (not in dataclass)
-    parser.add_argument("--out-dir", type=str, default="output", help="(default: %(default)s)")
-    parser.add_argument("--save-test-batch", action=argparse.BooleanOptionalAction, default=True, help="(default: %(default)s)")
-    parser.add_argument("--save-cnn-features", action=argparse.BooleanOptionalAction, default=False, help="(default: %(default)s)")
-    parser.add_argument("--tag", type=str, default="", help="Optional tag appended to exp dir name")
+    parser.add_argument(
+        "--out-dir", type=str, default="output", help="(default: %(default)s)"
+    )
+    parser.add_argument(
+        "--save-test-batch",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--save-cnn-features",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="(default: %(default)s)",
+    )
+    parser.add_argument(
+        "--tag", type=str, default="", help="Optional tag appended to exp dir name"
+    )
     return parser
 
 
