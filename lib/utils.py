@@ -36,8 +36,8 @@ def my_loss_spatial(target, outputs):
 
 
 def my_loss_decoded(target, outputs):
-    target_x = torch.cos(target).unsqueeze(-1)
-    target_y = torch.sin(target).unsqueeze(-1)
+    target_x = torch.cos(target)
+    target_y = torch.sin(target)
     output_x = outputs[:, 0]
     output_y = outputs[:, 1]
 
