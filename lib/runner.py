@@ -72,7 +72,7 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
         losses.append(batch_loss.item())
 
         if (b + 1) % 50 == 0:
-            print(f"\nbatch {b + 1} loss: {batch_loss}")
+            tqdm.write(f"\nbatch {b + 1} loss: {batch_loss}")
             if params.output_type == "angle":
                 with torch.no_grad():
                     io_angles = batch["ideal_observer_estimates"].to(params.device)
@@ -80,7 +80,7 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
                         [torch.cos(io_angles), torch.sin(io_angles)], dim=-1
                     ).unsqueeze(1)
                     ideal_loss = my_loss_spatial(batch["target_angles"], io_vec)
-                print(f"ideal observer loss: {ideal_loss.item()}")
+                tqdm.write(f"ideal observer loss: {ideal_loss.item()}")
 
     if params.test_batch_size > 0:
         with torch.no_grad():
