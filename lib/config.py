@@ -16,7 +16,7 @@ class ExperimentParams:
 
     # Model architecture
     hidden_size: int = 100
-    output_type: Literal["angle", "feature", "angle_color"] = "angle"
+    output_type: Literal["angle", "feature", "angle_color", "feature_decode"] = "angle"
 
     # Stimulus tuning
     tuning_concentration: float = 3.0
