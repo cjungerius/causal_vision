@@ -20,6 +20,7 @@ for p in model.features.parameters():
 model = model
 preprocess = weights.transforms()
 
+
 def _make_gabors(
     size: int,
     sigma: float,
@@ -29,7 +30,6 @@ def _make_gabors(
     gamma: float,
     device: torch.device,
 ) -> torch.Tensor:
-
     sigma_x = sigma
     sigma_y = sigma / gamma
 
@@ -51,7 +51,6 @@ def _make_gabors(
 
 
 def generate_gabor_features(angles, colors, model, device, preprocess):
-
     # Generate Gabor patches
     gabors = _make_gabors(
         size=232,
@@ -89,36 +88,71 @@ def generate_gabor_features(angles, colors, model, device, preprocess):
 
     return features, gabors
 
+
 class MyModel(nn.Module):
-    def __init__(self, input_size, N, output_size):
+    def __init__(self, input_size, output_channels=3):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, N)
-        self.fc2 = nn.Linear(N, N)
-        self.fc3 = nn.Linear(N, N)
-        self.fc4 = nn.Linear(N, output_size)
+
+        # 1. Project the latent vector (input_size) to a spatial map (64 channels x 29 x 29)
+        # We choose 64 channels as a balance between quality and size.
+        self.initial_channels = 64
+        self.initial_size = 29
+        self.fc_projection = nn.Linear(
+            input_size, self.initial_channels * self.initial_size * self.initial_size
+        )
+
+        # 2. Upsampling layers
+        # Each layer doubles the spatial dimension (29 -> 58 -> 116 -> 232)
+        # Kernel=4, Stride=2, Padding=1 is the standard "double size" configuration.
+        self.layer1 = nn.Sequential(
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(True),
+        )
+
+        self.layer2 = nn.Sequential(
+            nn.ConvTranspose2d(32, 16, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(True),
+        )
+
+        # Final layer to reach 232x232 and standard RGB range
+        self.layer3 = nn.Sequential(
+            nn.ConvTranspose2d(16, output_channels, kernel_size=4, stride=2, padding=1),
+            nn.Sigmoid(),  # Force output to be between [0, 1] for image display
+        )
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
-        x = self.fc4(x)
+        # x shape: (Batch_Size, 128)
+
+        # 1. Expand to linear features
+        x = self.fc_projection(x)
+
+        # 2. Reshape into a 3D volume (Batch, Channels, Height, Width)
+        x = x.view(-1, self.initial_channels, self.initial_size, self.initial_size)
+
+        # 3. Apply upsampling
+        x = self.layer1(x)  # -> 58x58
+        x = self.layer2(x)  # -> 116x116
+        x = self.layer3(x)  # -> 232x232
+
         return x
 
 
 # %%
-my_model = MyModel(128, 1000, 232*232*3)
+my_model = MyModel(128)
 my_model.to(device)
 
 # --- 1. Setup Training Hyperparameters ---
 BATCH_SIZE = 64
 NUM_EPOCHS = 1000  # Adjust as needed
-LEARNING_RATE = 1e-3 # Slightly lower LR usually stabilizes reconstruction tasks
+LEARNING_RATE = 1e-3  # Slightly lower LR usually stabilizes reconstruction tasks
 
 # Re-initialize optimizer with new LR if desired
 optimizer = torch.optim.Adam(my_model.parameters(), lr=LEARNING_RATE)
 
 # Use Mean Squared Error for reconstruction
-criterion = nn.MSELoss() 
+criterion = nn.MSELoss()
 
 print(f"Training on device: {device}")
 
@@ -126,45 +160,41 @@ print(f"Training on device: {device}")
 loss_history = []
 
 for epoch in tqdm(range(NUM_EPOCHS)):
-    my_model.train() # Set model to training mode
-    
+    my_model.train()  # Set model to training mode
+
     # --- A. Generate Random Training Data on the Fly ---
     # We generate random angles [0, 2pi] and random colors
     random_angles = torch.rand(BATCH_SIZE, device=device) * 2 * torch.pi
     random_colors = torch.rand(BATCH_SIZE, device=device) * 2 * torch.pi
-    
+
     # --- B. Get Ground Truth and Features ---
-    # We use your existing function. 
+    # We use your existing function.
     # features: The input to your MyModel (128,)
     # gt_images: The target output (3, 232, 232) - Note: these are preprocessed (normalized)
     features, gt_images = generate_gabor_features(
         random_angles, random_colors, model, device, preprocess
     )
-    
+
     # Ensure features are float32 (sometimes numpy conversion leaves them as double)
     features = features.float()
     gt_images = gt_images.to(device)
 
     # --- C. Forward Pass ---
     # 1. Pass features through your model
-    reconstructed_flat = my_model(features)
-    
-    # 2. Flatten the Ground Truth images to match MyModel's output
-    # gt_images shape: [B, 3, 232, 232] -> [B, 161472]
-    target_flat = gt_images.reshape(BATCH_SIZE, -1)
-    
+    reconstructed_img = my_model(features)
+
     # --- D. Calculate Loss ---
-    loss = criterion(reconstructed_flat, target_flat)
-    
+    loss = criterion(reconstructed_img, gt_images)
+
     # --- E. Backward Pass ---
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    
+
     loss_history.append(loss.item())
 
     if (epoch + 1) % 10 == 0:
-        tqdm.write(f"Epoch [{epoch+1}/{NUM_EPOCHS}], Loss: {loss.item():.6f}")
+        tqdm.write(f"Epoch [{epoch + 1}/{NUM_EPOCHS}], Loss: {loss.item():.6f}")
 
 print("Training Complete.")
 
@@ -172,66 +202,69 @@ print("Training Complete.")
 my_model.eval()
 with torch.no_grad():
     # Generate 1 test sample
-    test_angle = torch.tensor([0.0], device=device) # Vertical
-    test_color = torch.tensor([0.0], device=device) 
-    
-    feat, img_gt = generate_gabor_features(test_angle, test_color, model, device, preprocess)
-    
+    test_angle = torch.tensor([0.0], device=device)  # Vertical
+    test_color = torch.tensor([0.0], device=device)
+
+    feat, img_gt = generate_gabor_features(
+        test_angle, test_color, model, device, preprocess
+    )
+
     # Reconstruct
-    rec_flat = my_model(feat.float())
-    
+    rec_img = my_model(feat.float()).squeeze().permute(1, 2, 0).to("cpu")
+
     # Reshape back to image dimensions: (C, H, W)
-    img_gt = img_gt[0].permute(1,2,0).to("cpu")
-    rec_img = rec_flat.view(3, 232, 232).permute(1,2,0).to("cpu")
-    
+    img_gt = img_gt[0].permute(1, 2, 0).to("cpu")
+
     img_gt_vis = np.clip(img_gt.numpy(), 0, 1)
     rec_img_vis = np.clip(rec_img.numpy(), 0, 1)
 
     fig, ax = plt.subplots(2, 3, figsize=(10, 5))
-    ax[0,0].imshow(img_gt_vis)
-    ax[0,0].set_title("Original (Input to CNN)")
-    ax[1,0].imshow(rec_img_vis)
-    ax[1,0].set_title("Reconstructed (Output of MyModel)")
+    ax[0, 0].imshow(img_gt_vis)
+    ax[0, 0].set_title("Original (Input to CNN)")
+    ax[1, 0].imshow(rec_img_vis)
+    ax[1, 0].set_title("Reconstructed (Output of MyModel)")
 
     # Generate 1 test sample
-    test_angle = torch.tensor([torch.pi / 2], device=device) # Vertical
-    test_color = torch.tensor([torch.pi / 2], device=device) 
-    
-    feat, img_gt = generate_gabor_features(test_angle, test_color, model, device, preprocess)
-    
+    test_angle = torch.tensor([torch.pi / 2], device=device)  # Vertical
+    test_color = torch.tensor([torch.pi / 2], device=device)
+
+    feat, img_gt = generate_gabor_features(
+        test_angle, test_color, model, device, preprocess
+    )
+
     # Reconstruct
-    rec_flat = my_model(feat.float())
-    
+    rec_img = my_model(feat.float()).squeeze().permute(1, 2, 0).to("cpu")
+
     # Reshape back to image dimensions: (C, H, W)
-    img_gt = img_gt[0].permute(1,2,0).to("cpu")
-    rec_img = rec_flat.view(3, 232, 232).permute(1,2,0).to("cpu")
-    
+    img_gt = img_gt[0].permute(1, 2, 0).to("cpu")
+
     img_gt_vis = np.clip(img_gt.numpy(), 0, 1)
     rec_img_vis = np.clip(rec_img.numpy(), 0, 1)
-    ax[0,1].imshow(img_gt_vis)
-    ax[0,1].set_title("Original (Input to CNN)")
-    ax[1,1].imshow(rec_img_vis)
-    ax[1,1].set_title("Reconstructed (Output of MyModel)")
+    ax[0, 1].imshow(img_gt_vis)
+    ax[0, 1].set_title("Original (Input to CNN)")
+    ax[1, 1].imshow(rec_img_vis)
+    ax[1, 1].set_title("Reconstructed (Output of MyModel)")
 
     # Generate 1 test sample
-    test_angle = torch.tensor([torch.pi], device=device) # Vertical
-    test_color = torch.tensor([torch.pi], device=device) 
-    
-    feat, img_gt = generate_gabor_features(test_angle, test_color, model, device, preprocess)
-    
+    test_angle = torch.tensor([torch.pi], device=device)  # Vertical
+    test_color = torch.tensor([torch.pi], device=device)
+
+    feat, img_gt = generate_gabor_features(
+        test_angle, test_color, model, device, preprocess
+    )
+
     # Reconstruct
-    rec_flat = my_model(feat.float())
-    
+    rec_img = my_model(feat.float()).squeeze().permute(1, 2, 0).to("cpu")
+
     # Reshape back to image dimensions: (C, H, W)
-    img_gt = img_gt[0].permute(1,2,0).to("cpu")
-    rec_img = rec_flat.view(3, 232, 232).permute(1,2,0).to("cpu")
-    
+    img_gt = img_gt[0].permute(1, 2, 0).to("cpu")
+
     img_gt_vis = np.clip(img_gt.numpy(), 0, 1)
     rec_img_vis = np.clip(rec_img.numpy(), 0, 1)
-    ax[0,2].imshow(img_gt_vis)
-    ax[0,2].set_title("Original (Input to CNN)")
-    ax[1,2].imshow(rec_img_vis)
-    ax[1,2].set_title("Reconstructed (Output of MyModel)")
+    ax[0, 2].imshow(img_gt_vis)
+    ax[0, 2].set_title("Original (Input to CNN)")
+    ax[1, 2].imshow(rec_img_vis)
+    ax[1, 2].set_title("Reconstructed (Output of MyModel)")
     plt.show()
 
-torch.save(my_model.state_dict(), "feature_to_gabor_recoder.pth")
+torch.save(my_model.state_dict(), "feature_to_gabor_recoder_conv.pth")
