@@ -144,8 +144,8 @@ my_model = MyModel(128)
 my_model.to(device)
 
 # --- 1. Setup Training Hyperparameters ---
-BATCH_SIZE = 64
-NUM_EPOCHS = 1000  # Adjust as needed
+BATCH_SIZE = 100
+NUM_EPOCHS = 3000  # Adjust as needed
 LEARNING_RATE = 1e-3  # Slightly lower LR usually stabilizes reconstruction tasks
 
 # Re-initialize optimizer with new LR if desired
@@ -265,6 +265,6 @@ with torch.no_grad():
     ax[0, 2].set_title("Original (Input to CNN)")
     ax[1, 2].imshow(rec_img_vis)
     ax[1, 2].set_title("Reconstructed (Output of MyModel)")
-    plt.show()
+    plt.savefig("recoder_output.png")
 
 torch.save(my_model.state_dict(), "feature_to_gabor_recoder_conv.pth")
