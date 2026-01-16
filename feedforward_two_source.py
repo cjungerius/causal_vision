@@ -123,7 +123,16 @@ def get_circular_error(preds, targets):
     return diff
 
 
-def generate_batch(batch_size, noise_dist, p):
+def bump_input(n_a, angles, A=1, tuning_concentration=5.0):
+    device = angles.device
+    idx = torch.arange(n_a, device=device, dtype=angles.dtype)
+    preferred = (2 * torch.pi) * idx / n_a
+    diffs = angles.unsqueeze(1) - preferred.unsqueeze(0)
+    bumps = A * torch.exp(tuning_concentration * torch.cos(diffs))
+    return bumps
+
+
+def generate_batch(batch_size, noise_dist, p, n_a):
     noise_dist = VonMises(torch.tensor(0), kappa)
     latents = 2 * torch.pi * torch.rand([batch_size, 2])
     noise = noise_dist.sample((batch_size, 4))
@@ -135,15 +144,16 @@ def generate_batch(batch_size, noise_dist, p):
     b = x2 + noise[:, 1]
     c = (x1 * (1 - swap) + x2 * swap) + noise[:, 2]
     d = (x2 * (1 - swap) + x1 * swap) + noise[:, 3]
-
-    stimuli = torch.stack([a, b, c, d], dim=1)
+    angles = torch.stack([a, b, c, d], dim=1)
+    stimuli = torch.cat([bump_input(n_a, i) for i in [a, b, c, d]], dim=1)
     stimuli = (stimuli) % (2 * torch.pi)
-    return stimuli, latents, swap
+    return angles, stimuli, latents, swap
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-my_model = MyModel(4, 100, 2)
+n_a = 10
+my_model = MyModel(n_a * 4, 100, 2)
 my_model.to(device)
 
 optimizer = torch.optim.Adam(my_model.parameters(), lr=0.001)
@@ -159,7 +169,8 @@ model_losses = []
 
 for b in tqdm(range(epochs)):
     optimizer.zero_grad()
-    stimuli, targets, _ = generate_batch(batch_size, noise_dist, p)
+    angles, stimuli, targets, _ = generate_batch(batch_size, noise_dist, p, n_a)
+    angles = angles.to(device)
     stimuli = stimuli.to(device)
     targets = targets.to(device)
     output = my_model(stimuli)
@@ -172,7 +183,7 @@ for b in tqdm(range(epochs)):
         model_preds = torch.atan2(output[:, 1], output[:, 0]).detach()
         model_preds = model_preds % (2 * torch.pi)  # Normalize to [0, 2pi]
 
-        io_preds = compute_ideal_observer_estimates_1d(stimuli, float(kappa), p)
+        io_preds = compute_ideal_observer_estimates_1d(angles, float(kappa), p)
         io_preds = io_preds % (2 * torch.pi)
 
         model_errors = (
@@ -181,6 +192,7 @@ for b in tqdm(range(epochs)):
         io_errors = get_circular_error(io_preds, targets[:, 0]).detach().cpu().numpy()
 
         model_error = np.mean(model_errors - io_errors)
+        tqdm.write(f"model error: {loss}")
         tqdm.write(f"model error above ideal observer: {model_error}")
         plt.close("all")
         fig, ax = plt.subplots(figsize=(15, 10))
@@ -202,7 +214,8 @@ def visualize_test_batch(model, kappa_val, p_val, batch_size=1000):
     # 1. Generate Test Data
     # Note: We create a fresh noise distribution for testing to ensure independence
     test_dist = VonMises(torch.tensor(0.0), kappa_val)
-    stimuli, targets, _ = generate_batch(batch_size, test_dist, p_val)
+    angles, stimuli, targets, _ = generate_batch(batch_size, test_dist, p_val, n_a)
+    angles = angles.to(device)
     stimuli = stimuli.to(device)
     targets = targets[:, 0].to(device)  # We only care about estimating x1
 
@@ -215,7 +228,7 @@ def visualize_test_batch(model, kappa_val, p_val, batch_size=1000):
 
         # 3. Get Ideal Observer Predictions
         # Note: IO expects raw stimuli
-        io_preds = compute_ideal_observer_estimates_1d(stimuli, float(kappa_val), p_val)
+        io_preds = compute_ideal_observer_estimates_1d(angles, float(kappa_val), p_val)
         io_preds = io_preds % (2 * torch.pi)
 
     # 4. Calculate Errors (vs Ground Truth)
@@ -287,8 +300,4 @@ def visualize_test_batch(model, kappa_val, p_val, batch_size=1000):
     )
 
 
-# ==========================================
-# RUN THE VISUALIZATION
-# ==========================================
-# Run this after your training loop finishes
 visualize_test_batch(my_model, kappa, p)

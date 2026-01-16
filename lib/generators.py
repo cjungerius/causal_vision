@@ -77,7 +77,7 @@ class DataGenerator:
             raise ValueError(f"Expected {dim} kappa values, got {len(kappas)}")
 
         self.kappas = kappas
-        self.vms = [VonMises(0, k) for k in kappas]
+        self.vms = [VonMises(torch.tensor(0), torch.tensor(k)) for k in kappas]
 
     def _generate_angles(self, batch_size):
         return torch.rand(batch_size) * 2 * pi
@@ -237,7 +237,7 @@ class DataGenerator:
 
     def __call__(
         self,
-        batch_size: int = None,
+        batch_size: int = 0,
         test=False,
         structured_test=False,
         n_delta=20,
