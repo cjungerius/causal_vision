@@ -13,6 +13,7 @@ class ExperimentParams:
     p: float | List[float] = field(default_factory=lambda: [0.5])
     q: float = 0
     kappas: List[float] = field(default_factory=lambda: [8])
+    task_type: Literal["binding", "tracking"] = "binding"
 
     # Model architecture
     hidden_size: int = 100

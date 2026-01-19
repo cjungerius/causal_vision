@@ -6,7 +6,12 @@ import torch
 from tqdm import tqdm
 
 from .config import ExperimentParams
-from .generators import DataGenerator, SpatialStimuliGenerator, FeatureStimuliGenerator
+from .generators import (
+    BindingGenerator,
+    TrackingGenerator,
+    SpatialStimuliGenerator,
+    FeatureStimuliGenerator,
+)
 from .rnn import RNN
 from .trial import Trial
 from .utils import criterion, my_loss_spatial, analyze_test_batch, visualize_test_output
@@ -14,9 +19,14 @@ from .save import save_experiment, to_cpu
 
 
 def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
-    datagen = DataGenerator(
-        params.dims, params.kappas, params.p, params.q, params.device
+    datagen = (
+        BindingGenerator(params.dims, params.kappas, params.p, params.q, params.device)
+        if params.task_type == "binding"
+        else TrackingGenerator(params.kappas, params.p, params.device)
     )
+    # datagen = DataGenerator(
+    #     params.dims, params.kappas, params.p, params.q, params.device
+    # )
     if params.input_type == "spatial":
         stimuli = SpatialStimuliGenerator(
             params.dims,
@@ -84,7 +94,14 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
 
     if params.test_batch_size > 0:
         with torch.no_grad():
-            test_batch = trial.run_batch(rnn, params.test_batch_size, test=True , structured_test=True, n_delta=40, n_base=5)
+            test_batch = trial.run_batch(
+                rnn,
+                params.test_batch_size,
+                test=True,
+                structured_test=True,
+                n_delta=40,
+                n_base=5,
+            )
 
     return {"params": params, "rnn": rnn, "losses": losses, "test_batch": test_batch}
 
@@ -214,6 +231,8 @@ def add_test_batch(
     test_trial.add_phase("resp", 0.1, "blank", True)
 
     with torch.inference_mode():
-        test_batch = test_trial.run_batch(rnn, test_batch_size, True, structured_test=True)
+        test_batch = test_trial.run_batch(
+            rnn, test_batch_size, True, structured_test=True
+        )
 
     return test_batch

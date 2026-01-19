@@ -55,6 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=",".join(map(str, dc_defaults["kappas"])),
         help="Comma-separated list of kappas, e.g. '7.0' or '7.0,8.0' (default: %(default)s)",
     )
+    parser.add_argument(
+        "--task",
+        type=str,
+        default="binding",
+        help="Task for the model to perform, either tracking or binding (default: %(default)s)",
+    )
 
     # Model architecture
     parser.add_argument(
