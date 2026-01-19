@@ -54,8 +54,6 @@ class DataGenerator(ABC):
         delta_x = np.where(delta_x > np.pi, 2 * np.pi - delta_x, delta_x)
         kappa_eff = 2 * kappa * np.cos(delta_x / 2)
 
-        # log(besselI(0, k_eff)) - log((2pi)^2 * besselI(0, k)^2)
-        # We calculate this via log to ensure numerical stability
         log_num = np.log(besselI(0, kappa_eff))
         log_den = np.log((2 * np.pi) ** 2 * besselI(0, kappa) ** 2)
         return log_num - log_den
@@ -240,9 +238,7 @@ class BindingGenerator(DataGenerator):
         if self.dim == 1:
             return self._compute_binding_io_1d(batch)
         else:
-            # You would implement your _compute_binding_io_2d here
-            # For now returning dummy or calling the old method
-            return torch.zeros_like(batch["target_angles_observed"])
+            return self._compute_binding_io_2d(batch)
 
     def _compute_binding_io_1d(self, batch):
         t_obs = batch["target_angles_observed"].detach().cpu().numpy()
@@ -275,7 +271,64 @@ class BindingGenerator(DataGenerator):
         return torch.tensor(estimates, dtype=torch.float32, device=self.device)
 
     def _compute_binding_io_2d(self, batch):
-        return
+        ta = batch["target_angles"].detach().cpu().numpy()
+        tc = batch["target_colors"].detach().cpu().numpy()
+        da = batch["distractor_angles"].detach().cpu().numpy()
+        dc = batch["distractor_colors"].detach().cpu().numpy()
+
+        angles_log_lik_shared = self.estimate_shared_log_likelihood(
+            ta, da, self.kappas[0]
+        )
+        colors_log_lik_shared = self.estimate_shared_log_likelihood(
+            tc, dc, self.kappas[1]
+        )
+
+        # Prior over 4 cases (same/same, same/diff, diff/same, diff/diff)
+        p1, p2 = self.ps
+        r = (p1 * (1.0 - p1) * p2 * (1.0 - p2)) ** 0.5
+        log_prob = np.array(
+            [
+                np.log(p1 * p2 + self.q * r),
+                np.log(p1 * (1.0 - p2) - self.q * r),
+                np.log((1.0 - p1) * p2 - self.q * r),
+                np.log((1.0 - p1) * (1.0 - p2) + self.q * r),
+            ],
+            dtype=np.float64,
+        )
+
+        log_2pi = np.log(2 * np.pi)
+
+        # Per-sample log unnormalized posteriors over 4 cases
+        c1 = log_prob[0] + angles_log_lik_shared + colors_log_lik_shared
+        c2 = log_prob[1] + angles_log_lik_shared - 2 * log_2pi
+        c3 = log_prob[2] + colors_log_lik_shared - 2 * log_2pi
+        c4 = log_prob[3] - 4 * log_2pi.repeat(c1.size)
+
+        logc = np.stack([c1, c2, c3, c4], axis=0)
+        m = np.max(logc, axis=0, keepdims=True)
+        post = np.exp(logc - m)
+        post /= np.sum(post, axis=0, keepdims=True)
+
+        p_shared_angle = post[0] + post[1]
+
+        # Shared-component params for angle
+        delta_x = np.abs(ta - da)
+        delta_x = np.where(delta_x > np.pi, 2 * np.pi - delta_x, delta_x)
+        kappa_eff = 2 * self.kappas[0] * np.cos(delta_x / 2)
+        mu_shared = self.compute_circular_mean(ta, da) % (2 * np.pi)
+
+        estimates = []
+        for i in range(ta.shape[0]):
+            est = self.calc_mixture_circ_mean(
+                p_shared_angle[i], kappa_eff[i], self.kappas[0], mu_shared[i], ta[i]
+            )
+            estimates.append(float(est % (2 * np.pi)))
+
+        return torch.tensor(
+            estimates,
+            dtype=batch["target_angles"].dtype,
+            device=batch["target_angles"].device,
+        )
 
 
 class TrackingGenerator(DataGenerator):
