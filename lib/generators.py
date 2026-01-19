@@ -271,10 +271,10 @@ class BindingGenerator(DataGenerator):
         return torch.tensor(estimates, dtype=torch.float32, device=self.device)
 
     def _compute_binding_io_2d(self, batch):
-        ta = batch["target_angles"].detach().cpu().numpy()
-        tc = batch["target_colors"].detach().cpu().numpy()
-        da = batch["distractor_angles"].detach().cpu().numpy()
-        dc = batch["distractor_colors"].detach().cpu().numpy()
+        ta = batch["target_angles_observed"].detach().cpu().numpy()
+        tc = batch["target_colors_observed"].detach().cpu().numpy()
+        da = batch["distractor_angles_observed"].detach().cpu().numpy()
+        dc = batch["distractor_colors_observed"].detach().cpu().numpy()
 
         angles_log_lik_shared = self.estimate_shared_log_likelihood(
             ta, da, self.kappas[0]
