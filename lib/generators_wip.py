@@ -248,7 +248,7 @@ class BindingGenerator(DataGenerator):
 
         # Calculate P(Shared)
         log_lik_shared = self.estimate_shared_log_likelihood(t_obs, d_obs, kappa)
-        log_lik_indep = (1 / (2 * np.pi)) ** 2
+        log_lik_indep = np.log((1 / (2 * np.pi)) ** 2)
 
         log_p1 = np.log(p) + log_lik_shared
         log_p2 = np.log(1 - p) + log_lik_indep
