@@ -16,6 +16,7 @@ class Trial:
         eps1: float,
         datagen: DataGenerator,
         stimuli: SpatialStimuliGenerator | FeatureStimuliGenerator,
+        task_type: str = "binding",
     ):
         self.dt = dt
         self.eps1 = eps1
@@ -24,6 +25,7 @@ class Trial:
         self.phases = []
         self.datagen = datagen
         self.stimuli = stimuli
+        self.task_type = task_type
 
     def add_phase(self, name, T, type, output):
         self.phases.append(Phase(name, T, self.dt, type, output))
@@ -68,14 +70,21 @@ class Trial:
             true_batch_size = batch["target_angles"].shape[0]
         elif "target_colors" in batch:
             true_batch_size = batch["target_colors"].shape[0]
+        elif "a" in batch:
+            true_batch_size = batch["a"].shape[0]
         else:
             raise ValueError("Cannot determine batch size from batch dict.")
 
         if (max_chunk_size is None) or (true_batch_size <= max_chunk_size):
-            target_inputs, distractor_inputs = self.stimuli(batch, test)
+            if self.task_type == "binding":
+                target_inputs, distractor_inputs = self.stimuli(batch, test)
+            else:
+                a, b, c, d = self.stimuli(batch, test)
+                target_inputs = torch.cat((a, b), dim=1)
+                distractor_inputs = torch.cat((c, d), dim=1)
             eta_tilde = torch.randn(true_batch_size, N, device=device)
             hidden = model.init_hidden(true_batch_size)
-            empty_inputs = torch.zeros(true_batch_size, n_in, device=device)
+            empty_inputs = torch.zeros_like(target_inputs, device=device)
             outputs = []
             for phase in self.phases:
                 if phase.type == "target":
@@ -100,7 +109,11 @@ class Trial:
         # Helper to slice batch dict
         def _slice_batch(b, sl, B):
             return {
-                k: (v[sl] if torch.is_tensor(v) and v.ndim > 0 and v.shape[0] == B else v)
+                k: (
+                    v[sl]
+                    if torch.is_tensor(v) and v.ndim > 0 and v.shape[0] == B
+                    else v
+                )
                 for k, v in b.items()
             }
 

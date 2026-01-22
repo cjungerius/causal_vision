@@ -16,6 +16,7 @@ class DataGenerator(ABC):
         self,
         dim: int,
         kappas: float | int | list | tuple,
+        p: float | list | tuple,
         device: torch.device,
     ):
         if dim not in (1, 2):
@@ -42,6 +43,20 @@ class DataGenerator(ABC):
             VonMises(torch.tensor(0.0, device=device), torch.tensor(k, device=device))
             for k in kappas
         ]
+
+        if isinstance(p, (float, int)):
+            ps = [float(p)] * dim
+        elif isinstance(p, (list, tuple)):
+            if len(p) != dim:
+                raise ValueError(f"Expected {dim} p values, got {len(p)}")
+            ps = [float(x) for x in p]
+        else:
+            raise TypeError("p must be a float/int or a sequence")
+
+        if any((x < 0.0 or x > 1.0) for x in ps):
+            raise ValueError(f"All p values must be in [0, 1], got {ps}")
+
+        self.ps = ps
 
     # --- Shared Math Helpers (Numpy/CPU based for IO) ---
 
@@ -119,23 +134,11 @@ class BindingGenerator(DataGenerator):
         q: float,
         device: torch.device,
     ):
-        super().__init__(dim, kappas, device)
+        super().__init__(dim, kappas, p, device)
 
-        # --- Binding-Specific Probability Setup ---
-        if isinstance(p, (float, int)):
-            ps = [float(p)] * dim
-        elif isinstance(p, (list, tuple)):
-            if len(p) != dim:
-                raise ValueError(f"Expected {dim} p values, got {len(p)}")
-            ps = [float(x) for x in p]
-        else:
-            raise TypeError("p must be a float/int or a sequence")
-
-        if any((x < 0.0 or x > 1.0) for x in ps):
-            raise ValueError(f"All p values must be in [0, 1], got {ps}")
-
-        self.ps = ps
         self.q = float(q)
+
+        ps = self.ps
 
         # Validate Q (Correlation coeff)
         if self.dim == 2:
@@ -339,13 +342,13 @@ class TrackingGenerator(DataGenerator):
 
     def __init__(
         self,
-        kappas: float,
-        p_swap: float,
+        kappas: float | list | tuple,
+        p_swap: float | list | tuple,
         device: torch.device,
     ):
         # Tracking is 1D, so dim=1
-        super().__init__(dim=1, kappas=kappas, device=device)
-        self.p_swap = float(p_swap)
+        super().__init__(dim=1, kappas=kappas, p=p_swap, device=device)
+        self.p_swap = self.ps[0]
 
     def _generate_batch(self, batch_size, test, **kwargs):
         # 1. Latents (x1, x2)
@@ -390,10 +393,6 @@ class TrackingGenerator(DataGenerator):
 
         kappa = self.kappas[0]
 
-        # 1. Compute P(Stay)
-        # Note: self.p_swap is P(Swap). p_prior usually refers to P(Stay).
-        p_stay_prior = 1.0 - self.p_swap
-
         # Hypothesis 1: Stay (A->C, B->D)
         log_lik_stay = self.estimate_shared_log_likelihood(
             a, c, kappa
@@ -404,8 +403,8 @@ class TrackingGenerator(DataGenerator):
             a, d, kappa
         ) + self.estimate_shared_log_likelihood(b, c, kappa)
 
-        log_term_stay = np.log(p_stay_prior) + log_lik_stay
-        log_term_swap = np.log(1.0 - p_stay_prior) + log_lik_swap
+        log_term_stay = np.log(1.0 - self.p_swap) + log_lik_stay
+        log_term_swap = np.log(self.p_swap) + log_lik_swap
 
         # P(Stay | Data)
         p_stay_post = self.inv_logit(log_term_stay - log_term_swap)

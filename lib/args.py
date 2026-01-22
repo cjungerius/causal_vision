@@ -165,6 +165,7 @@ def params_from_args(args) -> ExperimentParams:
         p=p_list,
         q=args.q,
         kappas=kappas_list,
+        task_type=args.task,
         hidden_size=args.hidden_size,
         output_type=args.output_type,
         tuning_concentration=args.tuning_concentration,

@@ -24,9 +24,7 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
         if params.task_type == "binding"
         else TrackingGenerator(params.kappas, params.p, params.device)
     )
-    # datagen = DataGenerator(
-    #     params.dims, params.kappas, params.p, params.q, params.device
-    # )
+
     if params.input_type == "spatial":
         stimuli = SpatialStimuliGenerator(
             params.dims,
@@ -43,6 +41,11 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
         raise ValueError(f"invalid input type {params.input_type} specified")
 
     rnn_input_size = stimuli.n_inputs
+
+    # in the tracking task we concatenate 2 stimuli per phase
+    if params.task_type == "tracking":
+        rnn_input_size *= 2
+
     if params.output_type == "angle":
         params.output_size = 2
     elif params.output_type == "angle_color":
@@ -50,7 +53,7 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
     else:
         params.output_size = rnn_input_size
 
-    trial = Trial(params.dt, params.C, params.eps1, datagen, stimuli)
+    trial = Trial(params.dt, params.C, params.eps1, datagen, stimuli, params.task_type)
     trial.add_phase("prestim", 0.1, "blank", False)
     trial.add_phase("stim_1", 0.25, "distractor", False)
     trial.add_phase("stim_2", 0.25, "target", False)
@@ -89,7 +92,11 @@ def run_experiment(params: ExperimentParams) -> Dict[str, Any]:
                     io_vec = torch.stack(
                         [torch.cos(io_angles), torch.sin(io_angles)], dim=-1
                     ).unsqueeze(1)
-                    ideal_loss = my_loss_spatial(batch["target_angles"], io_vec)
+                    if params.task_type == "binding":
+                        ideal_loss = my_loss_spatial(batch["target_angles"], io_vec)
+                    elif params.task_type == "tracking":
+                        ideal_loss = my_loss_spatial(batch["x1"], io_vec)
+
                 tqdm.write(f"ideal observer loss: {ideal_loss.item()}")
 
     if params.test_batch_size > 0:
@@ -196,8 +203,10 @@ def add_test_batch(
     except StopIteration:
         runtime_device = torch.device("cpu")
 
-    datagen = DataGenerator(
-        params.dims, params.kappas, params.p, params.q, runtime_device
+    datagen = (
+        BindingGenerator(params.dims, params.kappas, params.p, params.q, params.device)
+        if params.task_type == "binding"
+        else TrackingGenerator(params.kappas, params.p, params.device)
     )
 
     if params.input_type == "spatial":

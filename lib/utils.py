@@ -46,7 +46,7 @@ def my_loss_decoded(target, outputs):
     return (x_errors + y_errors).mean()
 
 
-def criterion(batch, params):
+def criterion_binding(batch, params):
     if params.output_type == "angle":
         target = batch["target_angles"]
         outputs = batch["outputs"]
@@ -86,6 +86,22 @@ def criterion(batch, params):
             target = batch["target_colors"]
             loss += my_loss_decoded(target, outputs[:, 2:])
         return loss
+
+
+def criterion_tracking(batch, params):
+    if params.output_type == "angle":
+        target = batch["x1"]
+        outputs = batch["outputs"]
+        return my_loss_spatial(target, outputs)
+
+    return
+
+
+def criterion(batch, params):
+    if params.task_type == "binding":
+        return criterion_binding(batch, params)
+    elif params.task_type == "tracking":
+        return criterion_tracking(batch, params)
 
 
 def _make_gabors(
