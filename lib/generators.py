@@ -78,16 +78,35 @@ class DataGenerator(ABC):
         y = np.sin(angle1) + np.sin(angle2)
         return np.arctan2(y, x)
 
-    def calc_mixture_circ_mean(self, theta, kappa_1, kappa_2, mu_1, mu_2):
+    def calc_mixture_circ_mean(
+        self, weights, kappa_1, kappa_2, mu_1, mu_2, kappa_3=None, mu_3: None = None
+    ):
         """
-        Calculates the circular mean of a mixture of two Von Mises distributions.
-        theta: Weight of component 1
+        Calculates the circular mean of a mixture of 2 or 3 Von Mises distributions.
+
+        weights:
+            - If 2 components: a float (theta) where weights are [theta, 1-theta].
+            - If 3 components: a list/tuple/array [w1, w2, w3].
         """
+        # 1. Determine weights for 2 or 3 components
+        if kappa_3 is None:
+            w1, w2 = weights, 1.0 - weights
+            w3 = 0.0
+        else:
+            w1, w2, w3 = weights
+
+        # 2. Calculate Resultant Lengths (R = I1/I0)
         r1 = besselI(1, kappa_1) / besselI(0, kappa_1)
         r2 = besselI(1, kappa_2) / besselI(0, kappa_2)
-        z1 = r1 * np.exp(1j * mu_1)
-        z2 = r2 * np.exp(1j * mu_2)
-        z_mix = theta * z1 + (1 - theta) * z2
+
+        # 3. Form Complex Resultants
+        z_mix = w1 * r1 * np.exp(1j * mu_1) + w2 * r2 * np.exp(1j * mu_2)
+
+        # 4. Add third component if it exists
+        if kappa_3 is not None and mu_3 is not None:
+            r3 = besselI(1, kappa_3) / besselI(0, kappa_3)
+            z_mix += w3 * r3 * np.exp(1j * mu_3)
+
         return np.angle(z_mix)
 
     # --- Shared Torch Generators ---
@@ -343,26 +362,35 @@ class TrackingGenerator(DataGenerator):
     def __init__(
         self,
         kappas: float | list | tuple,
-        p_swap: float | list | tuple,
+        ps: float | list | tuple,
         device: torch.device,
     ):
         # Tracking is 1D, so dim=1
-        super().__init__(dim=1, kappas=kappas, p=p_swap, device=device)
-        self.p_swap = self.ps[0]
+        super().__init__(dim=1, kappas=kappas, p=ps, device=device)
+        self.p_swap = 0.5
 
     def _generate_batch(self, batch_size, test, **kwargs):
         # 1. Latents (x1, x2)
         x1 = self._generate_angles(batch_size)
         x2 = self._generate_angles(batch_size)
+        # Needed for independent draws
+        x3 = self._generate_angles(batch_size)
+        x4 = self._generate_angles(batch_size)
+        p_indep = self.ps[0]
 
         # 2. Swap Decision
         swap = (torch.rand(batch_size, device=self.device) < self.p_swap).float()
+        indep_1 = (torch.rand(batch_size, device=self.device) < p_indep).float()
+        indep_2 = (torch.rand(batch_size, device=self.device) < p_indep).float()
 
         # 3. Measurements
         # Time 1: A ~ x1, B ~ x2
         # Time 2: C ~ (x1 or x2), D ~ (x2 or x1)
         c_mean = x1 * (1 - swap) + x2 * swap
         d_mean = x2 * (1 - swap) + x1 * swap
+
+        c_mean = c_mean * (1 - indep_1) + x3 * indep_1
+        d_mean = d_mean * (1 - indep_2) + x4 * indep_2
 
         # Add Noise (using dim_idx=0 since it's 1D tracking)
         if not test:
@@ -385,6 +413,9 @@ class TrackingGenerator(DataGenerator):
         }
 
     def _ideal_observer(self, batch):
+        # get p_indep
+        p_indep = self.ps[0]
+
         # Extract numpy arrays
         a = batch["a"].detach().cpu().numpy()
         b = batch["b"].detach().cpu().numpy()
@@ -393,27 +424,72 @@ class TrackingGenerator(DataGenerator):
 
         kappa = self.kappas[0]
 
-        # Hypothesis 1: Stay (A->C, B->D)
-        log_lik_stay = self.estimate_shared_log_likelihood(
-            a, c, kappa
-        ) + self.estimate_shared_log_likelihood(b, d, kappa)
+        # 1. Priors (Log Space)
+        log_p_swap = np.log(self.p_swap)
+        log_p_noswap = np.log(1 - self.p_swap)
+        log_kept = np.log(1 - p_indep)
+        log_lost = np.log(p_indep)
 
-        # Hypothesis 2: Swap (A->D, B->C)
-        log_lik_swap = self.estimate_shared_log_likelihood(
-            a, d, kappa
-        ) + self.estimate_shared_log_likelihood(b, c, kappa)
+        # 2. Likelihoods
+        indep_ll = 2 * np.log(1 / (2 * np.pi))
+        shared_a_c = self.estimate_shared_log_likelihood(a, c, kappa)
+        shared_a_d = self.estimate_shared_log_likelihood(a, d, kappa)
+        shared_b_c = self.estimate_shared_log_likelihood(b, c, kappa)
+        shared_b_d = self.estimate_shared_log_likelihood(b, d, kappa)
 
-        log_term_stay = np.log(1.0 - self.p_swap) + log_lik_stay
-        log_term_swap = np.log(self.p_swap) + log_lik_swap
+        # 3. Calculate Log-Posterior for all 8 Scenarios (Prior + Likelihood)
+        # Outcome: Target is at C
+        lp1 = (
+            log_p_noswap + log_kept + log_kept + shared_a_c + shared_b_d
+        )  # Stay, Both Kept
+        lp3 = (
+            log_p_noswap + log_kept + log_lost + shared_a_c + indep_ll
+        )  # Stay, A Kept, B Lost
 
-        # P(Stay | Data)
-        p_stay_post = self.inv_logit(log_term_stay - log_term_swap)
+        # Outcome: Target is at D
+        lp2 = (
+            log_p_swap + log_kept + log_kept + shared_a_d + shared_b_c
+        )  # Swap, Both Kept
+        lp4 = (
+            log_p_swap + log_kept + log_lost + shared_a_d + indep_ll
+        )  # Swap, A Kept, B Lost
 
-        # 2. Candidate Means
+        # Outcome: Target is Lost (Best estimate is original 'a')
+        lp5 = (
+            log_p_noswap + log_lost + log_kept + indep_ll + shared_b_d
+        )  # Stay, A Lost, B Kept
+        lp6 = (
+            log_p_swap + log_lost + log_kept + indep_ll + shared_b_c
+        )  # Swap, A Lost, B Kept
+        lp7 = (
+            log_p_noswap + log_lost + log_lost + indep_ll + indep_ll
+        )  # Stay, Both Lost
+        lp8 = log_p_swap + log_lost + log_lost + indep_ll + indep_ll  # Swap, Both Lost
+
+        # 4. Aggregate Scenarios by Outcome using logaddexp
+        # Target is at C
+        log_w_C = np.logaddexp(lp1, lp3)
+
+        # Target is at D
+        log_w_D = np.logaddexp(lp2, lp4)
+
+        # Target is Lost (A is the best guess)
+        log_w_Lost = np.logaddexp(np.logaddexp(lp5, lp6), np.logaddexp(lp7, lp8))
+
+        # 5. Normalize Weights
+        log_total = np.logaddexp(log_w_C, np.logaddexp(log_w_D, log_w_Lost))
+        w_stay = np.exp(log_w_C - log_total)
+        w_swap = np.exp(log_w_D - log_total)
+        w_indep = np.exp(log_w_Lost - log_total)
+
+        # Now get estimate bas
+
+        # Candidate Means
         mu_stay = self.compute_circular_mean(a, c) % (2 * np.pi)
         mu_swap = self.compute_circular_mean(a, d) % (2 * np.pi)
+        mu_indep = a
 
-        # 3. Effective Kappas (based on distance between pairs)
+        # Effective Kappas (based on distance between pairs)
         def get_kappa_eff(x, y):
             dx = np.abs(x - y)
             dx = np.where(dx > np.pi, 2 * np.pi - dx, dx)
@@ -421,16 +497,21 @@ class TrackingGenerator(DataGenerator):
 
         k_stay = get_kappa_eff(a, c)
         k_swap = get_kappa_eff(a, d)
+        k_indep = np.full_like(a, kappa)
 
-        # 4. Mixture Mean
-        estimates = []
-        for i in range(len(a)):
-            est = self.calc_mixture_circ_mean(
-                p_stay_post[i], k_stay[i], k_swap[i], mu_stay[i], mu_swap[i]
-            )
-            estimates.append(float(est % (2 * np.pi)))
+        estimates = self.calc_mixture_circ_mean(
+            [w_stay, w_swap, w_indep],
+            k_stay,
+            k_swap,
+            mu_stay,
+            mu_swap,
+            k_indep,
+            mu_indep,
+        )
 
-        return torch.tensor(estimates, dtype=torch.float32, device=self.device)
+        return torch.tensor(
+            estimates % (2 * np.pi), dtype=torch.float32, device=self.device
+        )
 
 
 class StimuliGenerator(ABC):
